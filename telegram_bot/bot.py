@@ -40,6 +40,7 @@ def get_crew():
     It's extremely helpful for performance since we don't want to reinitialize 
     the heavy models on every single message.
     """
+    global _crew
     if _crew is None:
         from src.medical_chatbot.crew import arabic_chatbot
         _crew = arabic_chatbot()
