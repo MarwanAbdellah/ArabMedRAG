@@ -1,0 +1,2 @@
+# Telegram bot — extra dependency
+python-telegram-bot[webhooks]>=21.0

@@ -1,0 +1,132 @@
+# ─────────────────────────────────────────────────────
+#  tasks.yaml
+#  Arabic Medical Chatbot – Task Definitions
+# ─────────────────────────────────────────────────────
+
+language_detection_task:
+  description: >
+    Analyze the following user medical query and detect its language.
+    Always enforce Arabic as the required response language.
+
+    User Query: {query}
+
+    Use the language_detection_tool to process this query.
+  expected_output: >
+    A JSON string with the following fields:
+    - query: the original user query
+    - detected_language: the detected language name (e.g., "Arabic", "English")
+    - response_language: always "Arabic"
+    - note: explanation that responses are always in Arabic
+  agent: language_detection_agent
+
+medical_classification_task:
+  description: >
+    Classify the medical query into the appropriate category.
+    Pay special attention to emergency symptoms.
+
+    User Query: {query}
+
+    Use the medical_classifier_tool to process this query.
+    Important: If an emergency is detected, the emergency_response field
+    MUST be included in your output.
+  expected_output: >
+    A JSON string with:
+    - category: the medical category (symptoms/medications/diseases/
+                emergency/gynecology/cardiology/gastroenterology/
+                dermatology/general_health)
+    - is_emergency: boolean
+    - emergency_response: (only if is_emergency is true) the urgent Arabic message
+  agent: medical_classification_agent
+  context:
+    - language_detection_task
+
+hybrid_retrieval_task:
+  description: >
+    Retrieve the most relevant medical knowledge for the user query
+    using hybrid search (vector + keyword).
+
+    User Query: {query}
+
+    Use the hybrid_search_tool with the user query.
+    The tool will automatically decide whether to use BM25 fallback
+    based on vector similarity scores.
+  expected_output: >
+    A JSON string with:
+    - query: the search query
+    - total_results: number of results returned
+    - used_bm25_fallback: whether BM25 was triggered
+    - top_similarity: the highest cosine similarity score
+    - chunks: list of up to 5 document chunks, each with:
+        - rank, score, category_en, category, question, text
+  agent: hybrid_retrieval_agent
+  context:
+    - medical_classification_task
+
+citation_grounding_task:
+  description: >
+    Take the retrieved medical document chunks and format them as
+    structured, numbered citations for use in the Arabic response.
+
+    Pass the full JSON output from the retrieval task to the
+    citation_grounding_tool.
+  expected_output: >
+    A JSON string with:
+    - citations: list of citation objects (number, source, snippet, label)
+    - arabic_citation_list: numbered citation list (Arabic-formatted)
+    - context: full context block combining all retrieved text
+  agent: citation_grounding_agent
+  context:
+    - hybrid_retrieval_task
+
+arabic_medical_response_task:
+  description: >
+    Generate a comprehensive, medically accurate Arabic response to
+    the user's query. You MUST:
+
+    1. Use ONLY information from the retrieved context (do not fabricate).
+    2. Write in clear, formal Arabic (Modern Standard Arabic).
+    3. Structure the answer with headings if multiple topics are covered.
+    4. Include inline citation references like [1], [2] that map to the
+       provided citation list.
+    5. End with this exact medical disclaimer:
+       "⚕️ تنبيه: هذه المعلومات لأغراض تعليمية فقط ولا تُغني عن استشارة الطبيب المختص."
+
+    User Query: {query}
+
+    Use the provided citations and context from previous tasks.
+    If the query was classified as an emergency, lead with the
+    emergency warning message.
+  expected_output: >
+    A well-structured Arabic medical response including:
+    - Direct answer to the query (in Arabic)
+    - Specific details supported by the retrieved context
+    - Inline citations [1], [2], etc.
+    - Source list: "المصادر:"
+    - Medical disclaimer at the end
+  agent: arabic_medical_response_agent
+  context:
+    - citation_grounding_task
+    - medical_classification_task
+
+hallucination_detection_task:
+  description: >
+    Perform a lightweight hallucination check on the generated Arabic
+    medical response. Compare the answer against the retrieved context.
+
+    Use the hallucination_checker_tool with:
+    - generated_answer: the full text from arabic_medical_response_task
+    - retrieved_context: the 'context' field from citation_grounding_task
+
+    If hallucinations are detected, flag them and note that the answer
+    should be reviewed. Do NOT regenerate the full answer.
+  expected_output: >
+    A JSON string with:
+    - hallucination_detected: boolean
+    - flagged_count: number of flagged sentences (0 if none)
+    - unsupported_claims: list of flagged sentences (if any)
+    - final_answer: the validated Arabic response (pass-through from
+      arabic_medical_response_task, unchanged)
+  agent: hallucination_detection_agent
+  context:
+    - arabic_medical_response_task
+    - citation_grounding_task

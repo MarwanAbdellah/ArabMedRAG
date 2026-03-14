@@ -1,0 +1,57 @@
+# Environments
+.env
+.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# VS Code
+.vscode/
+
+# MacOS
+.DS_Store
+
+# Diagnostics and temporary files
+test_faiss.py
+build_log.txt
+categories_out.txt
+paper.aux
+paper.log
+paper.out
+
+# Data and Models
+data/
+indexes/
+*.csv
+*.tsv
+*.xlsx
+*.pkl
+*.bin
+
+# Documentation drafts
+paper.tex
+/assets
+condaenv.7uyxt89a.requirements.txt
