@@ -1,6 +1,6 @@
 # Environments
 .env
-.env.example
+api_keys.json
 
 # Python
 __pycache__/
@@ -9,6 +9,7 @@ __pycache__/
 *.so
 .Python
 env/
+venv/
 build/
 develop-eggs/
 dist/
@@ -35,14 +36,12 @@ wheels/
 .DS_Store
 
 # Diagnostics and temporary files
-test_faiss.py
 build_log.txt
 categories_out.txt
-paper.aux
-paper.log
-paper.out
+eval_output.txt
+eval_results.json
 
-# Data and Models
+# Data and Models (large files — use Git LFS if needed)
 data/
 indexes/
 *.csv
@@ -51,7 +50,22 @@ indexes/
 *.pkl
 *.bin
 
+# MLflow local DB
+mlflow.db
+mlruns/
+
+# Docker
+.dockerignore
+
+# Ruff cache
+.ruff_cache/
+
 # Documentation drafts
 paper.tex
+paper.aux
+paper.log
+paper.out
 /assets
-condaenv.7uyxt89a.requirements.txt
+
+# IDE
+.idea/

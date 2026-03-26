@@ -34,3 +34,5 @@ dependencies:
     - ollama>=0.1.7
     # LiteLLM (used by CrewAI internally)
     - litellm>=1.30.0
+    # MLflow Tracing
+    - mlflow>=2.20.0

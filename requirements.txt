@@ -9,11 +9,15 @@ crewai-tools>=0.14.0
 faiss-cpu>=1.7.4
 rank-bm25>=0.2.2
 
-# Embeddings
-sentence-transformers>=2.2.0
+# Embeddings (AraBERT)
+transformers>=4.36.0
 torch>=2.1.0
 sentencepiece>=0.1.99
 protobuf>=3.20.0
+arabert>=1.0.0
+
+# Sentence Transformers (optional fallback)
+sentence-transformers>=2.2.0
 
 # Language Detection
 langdetect>=1.0.9
@@ -36,3 +40,10 @@ streamlit>=1.32.0
 # LLM Backend
 ollama>=0.1.7
 litellm>=1.30.0
+
+# MLflow Tracing
+mlflow>=2.20.0
+
+# API Server
+fastapi>=0.104.0
+uvicorn>=0.24.0

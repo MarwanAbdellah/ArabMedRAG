@@ -16,21 +16,34 @@ Assembles 6 agents in a sequential process:
 import logging
 import os
 import pathlib
+import time
+import json
+
+import mlflow
+import mlflow.langchain
+from mlflow.tracing import fluent
 
 from crewai import Agent, Crew, Process, Task, LLM
 from crewai.project import CrewBase, agent, crew, task
 from dotenv import load_dotenv
 
-from src.medical_chatbot.tools.language_detection_tool  import LanguageDetectionTool
-from src.medical_chatbot.tools.classifier_tool          import MedicalClassifierTool
-from src.medical_chatbot.tools.hybrid_search_tool       import HybridSearchTool
-from src.medical_chatbot.tools.citation_tool            import CitationGroundingTool
-from src.medical_chatbot.tools.hallucination_checker_tool import HallucinationCheckerTool
+from src.medical_chatbot.tools.language_detection_tool import LanguageDetectionTool
+from src.medical_chatbot.tools.classifier_tool import MedicalClassifierTool
+from src.medical_chatbot.tools.hybrid_search_tool import HybridSearchTool
+from src.medical_chatbot.tools.citation_tool import CitationGroundingTool
+from src.medical_chatbot.tools.hallucination_checker_tool import (
+    HallucinationCheckerTool,
+)
+from src.medical_chatbot.tools.disease_entity_extractor import (
+    extract_disease_entity,
+    DiseaseEntityExtractorTool,
+)
 
 logger = logging.getLogger(__name__)
 
 # Fix Windows charmap errors from CrewAI EventsBus emoji logging
 import sys, io
+
 if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 if sys.stderr.encoding and sys.stderr.encoding.lower() not in ("utf-8", "utf8"):
@@ -38,9 +51,46 @@ if sys.stderr.encoding and sys.stderr.encoding.lower() not in ("utf-8", "utf8"):
 os.environ.setdefault("PYTHONIOENCODING", "utf-8")
 os.environ.setdefault("PYTHONUTF8", "1")
 
+
+# CJK Character Filter — strips Chinese/Japanese/Korean characters from responses
+def _clean_arabic_response(text: str) -> str:
+    """Remove CJK characters and normalize whitespace in LLM response."""
+    import re as _re
+    # Remove Chinese characters
+    text = _re.sub(r'[\u4e00-\u9fff\u3400-\u4dbf\u3000-\u303f]', '', text)
+    # Remove Japanese Hiragana/Katakana
+    text = _re.sub(r'[\u3040-\u309f\u30a0-\u30ff]', '', text)
+    # Remove Korean
+    text = _re.sub(r'[\uac00-\ud7af]', '', text)
+    # Normalize excessive whitespace
+    text = _re.sub(r'\s+', ' ', text).strip()
+    # Fix double newlines that may result from character removal
+    text = _re.sub(r'\n\s*\n\s*\n', '\n\n', text)
+    return text
+
 # Always resolve .env relative to project root (two levels above this file)
 _ENV_PATH = pathlib.Path(__file__).parent.parent.parent / ".env"
 load_dotenv(dotenv_path=str(_ENV_PATH), override=True)
+
+
+def _setup_mlflow():
+    """Initialize MLflow tracking if configured."""
+    mlflow_enabled = os.getenv("MLFLOW_ENABLED", "false").lower() == "true"
+    if not mlflow_enabled:
+        return None
+
+    import mlflow.crewai
+
+    mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5000"))
+    experiment_name = os.getenv("MLFLOW_EXPERIMENT_NAME", "arabic_medical_chatbot")
+    mlflow.set_experiment(experiment_name)
+
+    mlflow.crewai.autolog()
+
+    if mlflow.active_run():
+        mlflow.end_run()
+
+    return mlflow.start_run()
 
 
 # Description: Initializes our main LLM client (like an OpenRouter/Llama endpoint) based on the settings in our `.env` file.
@@ -55,7 +105,7 @@ def _build_llm() -> LLM:
     if provider == "openrouter":
         # Use the openrouter/ prefix — LiteLLM routes natively, no base_url needed.
         # Providing base_url alongside the openrouter/ prefix causes malformed requests.
-        model   = os.getenv("OPENROUTER_MODEL", "openrouter/qwen/qwen-2.5-72b-instruct")
+        model = os.getenv("OPENROUTER_MODEL", "openrouter/qwen/qwen-2.5-72b-instruct")
         api_key = os.getenv("OPENROUTER_API_KEY", "")
         print(f"[crew] OpenRouter model: {model}")
         return LLM(
@@ -64,7 +114,7 @@ def _build_llm() -> LLM:
         )
 
     # Ollama fallback
-    model    = os.getenv("OLLAMA_MODEL", "ollama/qwen2.5")
+    model = os.getenv("OLLAMA_MODEL", "ollama/qwen2.5")
     base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
     print(f"[crew] Ollama model: {model} @ {base_url}")
     return LLM(model=model, base_url=base_url)
@@ -81,18 +131,27 @@ class arabic_chatbot:
     """
 
     agents_config = "config/agents.yaml"
-    tasks_config  = "config/tasks.yaml"
+    tasks_config = "config/tasks.yaml"
 
     def __init__(self):
         self.llm = _build_llm()
 
     # ── Tools (instantiated once) ──────────────────────
 
-    def _lang_tool(self)       -> LanguageDetectionTool:   return LanguageDetectionTool()
-    def _cls_tool(self)        -> MedicalClassifierTool:   return MedicalClassifierTool()
-    def _search_tool(self)     -> HybridSearchTool:        return HybridSearchTool()
-    def _citation_tool(self)   -> CitationGroundingTool:   return CitationGroundingTool()
-    def _hallucination_tool(self) -> HallucinationCheckerTool: return HallucinationCheckerTool()
+    def _lang_tool(self) -> LanguageDetectionTool:
+        return LanguageDetectionTool()
+
+    def _cls_tool(self) -> MedicalClassifierTool:
+        return MedicalClassifierTool()
+
+    def _search_tool(self) -> HybridSearchTool:
+        return HybridSearchTool()
+
+    def _citation_tool(self) -> CitationGroundingTool:
+        return CitationGroundingTool()
+
+    def _hallucination_tool(self) -> HallucinationCheckerTool:
+        return HallucinationCheckerTool()
 
     # ── Agents ─────────────────────────────────────────
 
@@ -140,7 +199,7 @@ class arabic_chatbot:
     def arabic_medical_response_agent(self) -> Agent:
         return Agent(
             config=self.agents_config["arabic_medical_response_agent"],
-            tools=[],   # Pure generation from context – no tools needed
+            tools=[],  # Pure generation from context – no tools needed
             llm=self.llm,
             verbose=True,
             max_iter=3,
@@ -187,8 +246,8 @@ class arabic_chatbot:
     @crew
     def crew(self) -> Crew:
         return Crew(
-            agents=self.agents,   # auto-populated by @agent decorators
-            tasks=self.tasks,     # auto-populated by @task decorators
+            agents=self.agents,  # auto-populated by @agent decorators
+            tasks=self.tasks,  # auto-populated by @task decorators
             process=Process.sequential,
             verbose=True,
             tracing=True,
@@ -197,35 +256,56 @@ class arabic_chatbot:
     # ── Convenience method ─────────────────────────────
 
     # Description: The main trigger pipe! It fires up the multi-agent task sequence and directly streams responses back to the user interface.
-    def run(self, query: str, history: list = None, mode: str = "hybrid", on_progress=None) -> str:
+    def run(
+        self, query: str, history: list = None, mode: str = "hybrid", on_progress=None
+    ) -> str:
         """
         Direct pipeline with retrieval mode and live progress support.
         mode: 'rag' | 'bm25' | 'internet' | 'hybrid' | 'all'
         on_progress: optional callable(step, label, detail) for live UI updates
         """
+        mlflow_run = _setup_mlflow()
+        t0 = time.time()
+
         def _progress(step, label, detail=""):
             if on_progress:
                 on_progress(step, label, detail)
+
         import json
         import litellm
 
-        from src.medical_chatbot.tools.language_detection_tool import LanguageDetectionTool
+        try:
+            mlflow.log_param("query", query[:100])
+            mlflow.log_param("mode", mode)
+            mlflow.log_param("history_length", len(history) if history else 0)
+        except Exception:
+            pass
+
+        from src.medical_chatbot.tools.language_detection_tool import (
+            LanguageDetectionTool,
+        )
         from src.medical_chatbot.tools.classifier_tool import MedicalClassifierTool
         from src.medical_chatbot.tools.hybrid_search_tool import HybridSearchTool
         from src.medical_chatbot.tools.citation_tool import CitationGroundingTool
-        from src.medical_chatbot.tools.hallucination_checker_tool import HallucinationCheckerTool
+        from src.medical_chatbot.tools.hallucination_checker_tool import (
+            HallucinationCheckerTool,
+        )
 
         # Prepare context-aware search query and history block
         search_query = query
         history_block = ""
         if history:
-            last_user_msg = next((m["content"] for m in reversed(history) if m["role"] == "user"), None)
+            last_user_msg = next(
+                (m["content"] for m in reversed(history) if m["role"] == "user"), None
+            )
             if last_user_msg:
                 # Prepend the previous question so RAG and Serper understand follow-up pronouns
                 search_query = f"{last_user_msg} {query}"
 
             lines = []
-            for m in history[-4:]:  # Ensure we only use the last 4 messages to save tokens
+            for m in history[
+                -4:
+            ]:  # Ensure we only use the last 4 messages to save tokens
                 role_ar = "المستخدم" if m["role"] == "user" else "المساعد الطبي"
                 lines.append(f"{role_ar}: {m['content']}")
             history_block = "سياق المحادثة السابقة:\n" + "\n".join(lines) + "\n\n"
@@ -233,15 +313,21 @@ class arabic_chatbot:
         # ── 0. LLM Configuration ──────────────────────────────────────────────
         import os
         from dotenv import load_dotenv
+
         load_dotenv(override=True)
         provider = os.getenv("LLM_PROVIDER", "openrouter").lower().strip()
         if provider == "openrouter":
-            model   = os.getenv("OPENROUTER_MODEL", "openrouter/qwen/qwen-2.5-72b-instruct")
+            model = os.getenv(
+                "OPENROUTER_MODEL", "openrouter/qwen/qwen-2.5-72b-instruct"
+            )
             api_key = os.getenv("OPENROUTER_API_KEY", "")
-            kwargs  = {"model": model, "api_key": api_key}
+            kwargs = {"model": model, "api_key": api_key}
         else:
-            model  = os.getenv("OLLAMA_MODEL", "ollama/qwen2.5")
-            kwargs = {"model": model, "api_base": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")}
+            model = os.getenv("OLLAMA_MODEL", "ollama/qwen2.5")
+            kwargs = {
+                "model": model,
+                "api_base": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
+            }
 
         # ── 0.5. Medical Intent Classification ────────────────────────────────
         _progress("intent", "🤔 تحليل القصد", "التحقق من المحتوى الطبي...")
@@ -251,21 +337,38 @@ class arabic_chatbot:
                 messages=[{"role": "user", "content": intent_prompt}],
                 max_tokens=10,
                 temperature=0.0,
-                **kwargs
+                **kwargs,
             )
             intent_ans = (intent_resp.choices[0].message.content or "").strip()
             if "تحية" in intent_ans:
                 _progress("intent", "👋 تحية", "توليد الرد للتحية...")
                 greet_resp = litellm.completion(
-                    messages=[{"role": "user", "content": f"رد على هذه التحية أو الرسالة الودية بلغة المرسل وبشكل مهذب ومختصر كطبيب، بدون إضافة معلومات طبية:\n{query}"}],
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": f"رد على هذه التحية أو الرسالة الودية بلغة المرسل وبشكل مهذب ومختصر كطبيب، بدون إضافة معلومات طبية:\n{query}",
+                        }
+                    ],
                     max_tokens=100,
                     temperature=0.5,
-                    **kwargs
+                    **kwargs,
                 )
-                return (greet_resp.choices[0].message.content or "").strip()
+                result = (greet_resp.choices[0].message.content or "").strip()
+                try:
+                    mlflow.log_metric("elapsed_time", time.time() - t0)
+                    mlflow.set_tag("intent", "greeting")
+                except Exception:
+                    pass
+                return result
             elif "غير طبي" in intent_ans:
                 _progress("intent", "❌ غير طبي", "تم رفض الطلب")
-                return "عذراً، أنا أعمل كمساعد طبي استشاري ولا يمكنني الإجابة إلا على الأسئلة والاستفسارات المتعلقة بالطب والصحة."
+                result = "عذراً، أنا أعمل كمساعد طبي استشاري ولا يمكنني الإجابة إلا على الأسئلة والاستفسارات المتعلقة بالطب والصحة."
+                try:
+                    mlflow.log_metric("elapsed_time", time.time() - t0)
+                    mlflow.set_tag("intent", "non_medical")
+                except Exception:
+                    pass
+                return result
         except Exception as e:
             print(f"[Pipeline] Intent check failed: {e}")
             pass
@@ -275,7 +378,7 @@ class arabic_chatbot:
         lang_json = LanguageDetectionTool()._run(query)
         try:
             lang = json.loads(lang_json)
-            detected = lang.get('detected_language', 'ar')
+            detected = lang.get("detected_language", "ar")
             print(f"[Pipeline] language={detected}")
         except Exception:
             print("[Pipeline] language=unknown")
@@ -288,14 +391,37 @@ class arabic_chatbot:
         except Exception:
             cls = {}
         cat_display = cls.get("category_arabic") or cls.get("category", "عام")
-        print(f"[Pipeline] category={cls.get('category')}, emergency={cls.get('is_emergency')}")
+        print(
+            f"[Pipeline] category={cls.get('category')}, emergency={cls.get('is_emergency')}"
+        )
+
+        # ── 2.5. Disease Entity Extraction ────────────────────────────────────
+        _progress("entity", "🔬 استخراج الكيان المرضي", "تحديد اسم المرض من السؤال...")
+        entity_info = extract_disease_entity(query)
+        disease_entity = entity_info.get("disease_entity", "")
+        query_intent = entity_info.get("query_intent", "general")
+        print(f"[Pipeline] entity='{disease_entity}', intent='{query_intent}'")
+        _progress("entity", "✅ تم استخراج الكيان", f"المرض: {disease_entity} | القصد: {query_intent}")
+        try:
+            mlflow.set_tag("disease_entity", disease_entity[:100] if disease_entity else "none")
+            mlflow.set_tag("query_intent", query_intent)
+            mlflow.set_tag("extraction_method", entity_info.get("extraction_method", "unknown"))
+        except Exception:
+            pass
 
         if cls.get("is_emergency"):
             _progress("emergency", "🚨 حالة طارئة", "يُنصح بطلب المساعدة فوراً")
-            return cls.get(
+            result = cls.get(
                 "emergency_response",
                 "⚠️ قد تشير هذه الأعراض إلى حالة طبية طارئة. يرجى طلب المساعدة الطبية فورًا أو الاتصال بخدمات الطوارئ.",
             )
+            try:
+                mlflow.log_metric("elapsed_time", time.time() - t0)
+                mlflow.set_tag("emergency", "true")
+                mlflow.set_tag("category", cat_display)
+            except Exception:
+                pass
+            return result
 
         # ── 3. Retrieval (mode-aware) ──────────────────────────────────────────────
         results_count, bm25_used = 0, False
@@ -305,13 +431,17 @@ class arabic_chatbot:
             if mode == "bm25":
                 _progress("retrieve", "🔑 BM25 بحث نصي", "تشغيل محرك BM25...")
                 import src.medical_chatbot.tools.hybrid_search_tool as _hs_mod
+
                 _orig_thresh = _hs_mod.VECTOR_THRESHOLD
                 _hs_mod.VECTOR_THRESHOLD = 1.0
                 search_json = HybridSearchTool()._run(search_query)
                 _hs_mod.VECTOR_THRESHOLD = _orig_thresh
             elif mode == "rag":
-                _progress("retrieve", "🧠 FAISS سحب دلالي", "بحث FAISS عن الدلالات القريبة...")
+                _progress(
+                    "retrieve", "🧠 FAISS سحب دلالي", "بحث FAISS عن الدلالات القريبة..."
+                )
                 import src.medical_chatbot.tools.hybrid_search_tool as _hs_mod
+
                 _orig_thresh = _hs_mod.VECTOR_THRESHOLD
                 _hs_mod.VECTOR_THRESHOLD = 0.0
                 search_json = HybridSearchTool()._run(search_query)
@@ -321,18 +451,26 @@ class arabic_chatbot:
                 search_json = HybridSearchTool()._run(search_query)
 
             try:
-                search_data   = json.loads(search_json)
+                search_data = json.loads(search_json)
                 results_count = search_data.get("total_results", 5)
-                bm25_used     = search_data.get("used_bm25_fallback", False)
+                bm25_used = search_data.get("used_bm25_fallback", False)
             except Exception:
                 results_count, bm25_used = 5, False
             bm25_label = "نعم" if bm25_used else "لا"
-            _progress("retrieve", "✅ اكتمل الاسترجاع", f"{results_count} نتيجة • BM25: {bm25_label}")
-            print(f"[Pipeline] retrieval done — mode={mode} results={results_count}, bm25={bm25_used}")
+            _progress(
+                "retrieve",
+                "✅ اكتمل الاسترجاع",
+                f"{results_count} نتيجة • BM25: {bm25_label}",
+            )
+            print(
+                f"[Pipeline] retrieval done — mode={mode} results={results_count}, bm25={bm25_used}"
+            )
         else:
             _progress("retrieve", "⏭️ تخطي قاعدة البيانات", "وضع الإنترنت بدلاً من RAG")
             print(f"[Pipeline] skipping RAG/BM25 — mode={mode}")
-            search_json = json.dumps({"chunks": [], "total_results": 0, "used_bm25_fallback": False})
+            search_json = json.dumps(
+                {"chunks": [], "total_results": 0, "used_bm25_fallback": False}
+            )
 
         # ── 4. Citation formatting ───────────────────────────────────────────
         cite_json = CitationGroundingTool()._run(search_json)
@@ -349,7 +487,9 @@ class arabic_chatbot:
         # ── 4a. Context Evaluator (LLM Judge) ────────────────────────────────
         force_internet = False
         if context.strip():
-            _progress("evaluator", "⚖️ تقييم النتائج", "فحص مدى ارتباط المصادر بالسؤال...")
+            _progress(
+                "evaluator", "⚖️ تقييم النتائج", "فحص مدى ارتباط المصادر بالسؤال..."
+            )
             eval_prompt = (
                 f"هل المعلومات التالية مفيدة وتتعلق مباشرة بالسؤال الطبي المطروح؟ "
                 f"أجب بكلمة 'نعم' أو 'لا' فقط.\n\nالسؤال: {query}\n\nالمعلومات:\n{context[:1000]}"
@@ -359,12 +499,16 @@ class arabic_chatbot:
                     messages=[{"role": "user", "content": eval_prompt}],
                     max_tokens=10,
                     temperature=0.0,
-                    **kwargs
+                    **kwargs,
                 )
                 eval_ans = (eval_resp.choices[0].message.content or "").strip()
                 if "لا" in eval_ans or "No" in eval_ans:
                     print("[Pipeline] Context Evaluator REJECTED the retrieved chunks.")
-                    _progress("evaluator", "⚠️ معلومات غير مطابقة", "المصادر المسترجعة قد لا تجيب على السؤال تماماً.")
+                    _progress(
+                        "evaluator",
+                        "⚠️ معلومات غير مطابقة",
+                        "المصادر المسترجعة قد لا تجيب على السؤال تماماً.",
+                    )
                     # We no longer clear the context or search_json. We pass them to the LLM so the user can still see them,
                     # but we tell the LLM that the retrieved context is likely irrelevant.
                     context_rejected = True
@@ -382,30 +526,42 @@ class arabic_chatbot:
         serper_count = 0
         load_dotenv(dotenv_path=str(_ENV_PATH), override=True)
         # Serper strictly runs ONLY if mode explicitly asks for internet
-        serper_enabled = (mode in ("internet", "all") and os.getenv("ENABLE_SERPER", "false").lower() == "true")
+        serper_enabled = (
+            mode in ("internet", "all")
+            and os.getenv("ENABLE_SERPER", "false").lower() == "true"
+        )
         if serper_enabled:
             serper_key = os.getenv("SERPER_API_KEY", "")
             if serper_key:
                 try:
                     import requests as _req
+
                     # Use ONLY the clean bare query — not the history-prepended version
                     serper_q = query.strip()
                     resp_s = _req.post(
                         "https://google.serper.dev/search",
-                        headers={"X-API-KEY": serper_key, "Content-Type": "application/json"},
+                        headers={
+                            "X-API-KEY": serper_key,
+                            "Content-Type": "application/json",
+                        },
                         json={"q": serper_q, "num": 5, "gl": "sa", "hl": "ar"},
                         timeout=10,
                     )
                     raw_json = resp_s.json()
                     hits = raw_json.get("organic", [])[:2]
-                    print(f"[Serper] query={serper_q!r} status={resp_s.status_code} organic={len(raw_json.get('organic', []))}")
+                    print(
+                        f"[Serper] query={serper_q!r} status={resp_s.status_code} organic={len(raw_json.get('organic', []))}"
+                    )
 
                     # If 0 results, retry without Arabic locale (wider net)
                     if not hits:
                         print("[Serper] 0 results with ar locale — retrying globally")
                         resp_s2 = _req.post(
                             "https://google.serper.dev/search",
-                            headers={"X-API-KEY": serper_key, "Content-Type": "application/json"},
+                            headers={
+                                "X-API-KEY": serper_key,
+                                "Content-Type": "application/json",
+                            },
                             json={"q": serper_q, "num": 5},
                             timeout=10,
                         )
@@ -414,12 +570,18 @@ class arabic_chatbot:
 
                     serper_count = len(hits)
                     for hit in hits:
-                        web_sources.append({
-                            "title":   hit.get("title", "مصدر طبي"),
-                            "url":     hit.get("link", ""),
-                            "snippet": hit.get("snippet", "")[:300],
-                        })
-                    _progress("serper", "🌐 بحث إنترنت", f"تم استرجاع {serper_count} مصدر إنترنت")
+                        web_sources.append(
+                            {
+                                "title": hit.get("title", "مصدر طبي"),
+                                "url": hit.get("link", ""),
+                                "snippet": hit.get("snippet", "")[:300],
+                            }
+                        )
+                    _progress(
+                        "serper",
+                        "🌐 بحث إنترنت",
+                        f"تم استرجاع {serper_count} مصدر إنترنت",
+                    )
                     print(f"[Pipeline] serper results={serper_count}")
                 except Exception as e:
                     print(f"[Pipeline] serper failed: {e}")
@@ -436,22 +598,30 @@ class arabic_chatbot:
         # ── 5. Single LLM call for Arabic medical response ───────────────────
         # Note: LLM logic now initialized at top of run() to support intent classifier early out.
 
-
         # Build reference list: ONLY web sources (max 2), as Arabic bullet points
         ref_lines: list[str] = []
-        for ws in web_sources[:2]:          # already capped at 2 by Serper block
+        for ws in web_sources[:2]:  # already capped at 2 by Serper block
             ref_lines.append(f"  • {ws['title']} — {ws['url']}")
         ref_block = "\n".join(ref_lines) if ref_lines else ""
 
         # Use the Arabic specialization label from classifier
         cat_label = cls.get("category_arabic") or cls.get("category", "عام")
+        # Build entity-focus instruction if a disease was extracted
+        entity_focus = ""
+        if disease_entity and disease_entity != query:
+            entity_focus = (
+                f"⚠️ الكيان المرضي المستخرج: «{disease_entity}» (القصد: {query_intent})\n"
+                f"ركز إجابتك على هذا المرض/الحالة تحديداً. لا تخلط مع أمراض أخرى.\n\n"
+            )
         prompt = (
             f"أنت طبيب عربي متخصص. أجب على السؤال الطبي الحالي بالعربية الفصحى فقط، "
-            f"بناءً على السياق الطبي المسترجع أدناه وعلى سياق المحادثة السابقة إن جُد.\n\n"
+            f"بناءً على السياق الطبي المسترجع أدناه وعلى سياق المحادثة السابقة إن وُجد.\n\n"
+            f"{entity_focus}"
             f"{history_block}"
             f"السؤال الحالي: {query}\n\n"
             f"السياق الطبي:\n{context}\n\n"
             f"التعليمات الإلزامية:\n"
+            f"0. يجب أن يكون ردك بالعربية الفصحى حصراً. لا تستخدم أبداً أي أحرف صينية أو يابانية أو كورية أو أي لغة غير العربية. إذا وجدت معلومات بلغة غير العربية في السياق، تجاهلها تماماً.\n"
             f"1. إذا كان السؤال لا يتعلق بالطب والصحة (مثل التحيات، أو الرموز التعبيرية، أو مواضيع عامة)، تجاهل جميع التعليمات التالية. فقط اعتذر بلباقة موضحاً أنك مستشار طبي ولا تجيب إلا على الاستفسارات الطبية، وتوقف.\n"
             f"2. ابدأ ردك دائماً بتحية إسلامية مناسبة.\n"
             f"3. التزم بالإجابة المباشرة والموجزة على ما طُلب فقط. إذا سأل المريض 'ما هو المرض'، اشرح ماهيته فقط دون إضافة الأعراض وطرق التشخيص والعلاج إلا إذا طُلب ذلك صراحة.\n"
@@ -465,14 +635,15 @@ class arabic_chatbot:
             f"   ══════════════════════════════\n"
             + (
                 f"8. **هام جداً:** السياق المسترجع الحالي يُعتبر غير مفيد أو غير كافٍ للرد على سؤال المستخدم. يرجى توضيح ذلك بلباقة للمستخدم واقترح عليه تغيير وضع البحث إلى 'الكل' (All) للبحث في الإنترنت، أو إعادة صياغة السؤال.\n"
-                if context_rejected else ""
+                if context_rejected
+                else ""
             )
             + (
                 f"8. بعد قسم التصنيف وقبل المراجع، أضف قسم '💡 أسئلة مقترحة' يحتوي على 2-3 أسئلة مفيدة يمكن للمستخدم طرحها لمزيد من الاستكشاف.\n"
                 f"9. أضف قسم المراجع التالية كنقاط (نقطتان فقط):\n"
                 f"   📚 المراجع:\n{ref_block}\n"
-                if ref_block else
-                f"8. بعد قسم التصنيف، أضف قسم '💡 أسئلة مقترحة' يحتوي على 2-3 أسئلة مفيدة متعلقة بالموضوع.\n"
+                if ref_block
+                else f"8. بعد قسم التصنيف، أضف قسم '💡 أسئلة مقترحة' يحتوي على 2-3 أسئلة مفيدة متعلقة بالموضوع.\n"
             )
             + f"10. اختم بهذا التنبيه الطبي بالضبط: "
             + f'"⚕️ تنبيه: هذه المعلومات لأغراض تعليمية فقط ولا تُغني عن استشارة الطبيب المختص."\n\n'
@@ -480,8 +651,12 @@ class arabic_chatbot:
         )
 
         _progress("classify", "🏥 تصنيف طبي", f"التخصص: {cat_display}")
-        
-        _progress("llm", f"🤖 توليد الرد [{model.split('/')[-1]}]", "إرسال السياق إلى النموذج...")
+
+        _progress(
+            "llm",
+            f"🤖 توليد الرد [{model.split('/')[-1]}]",
+            "إرسال السياق إلى النموذج...",
+        )
         print(f"[Pipeline] calling LLM: {model}")
         resp = litellm.completion(
             messages=[{"role": "user", "content": prompt}],
@@ -490,6 +665,8 @@ class arabic_chatbot:
             **kwargs,
         )
         answer = resp.choices[0].message.content or ""
+        # Apply CJK character filter to prevent Chinese/Japanese/Korean leakage
+        answer = _clean_arabic_response(answer)
         _progress("llm", "🤖 توليد الرد", f"اكتمل الرد ({len(answer)} حرف)")
         print(f"[Pipeline] answer_len={len(answer)}")
 
@@ -514,22 +691,40 @@ class arabic_chatbot:
                     docs_text = "\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                     docs_text += "📑 **المصادر الطبية المسترجعة من قاعدة البيانات:**\n"
                     for i, c in enumerate(chunks, 1):
-                        q = c.get("question", "").replace('\n', ' ').strip()
-                        t = c.get("text", "").replace('\n', ' ').strip()
+                        q = c.get("question", "").replace("\n", " ").strip()
+                        t = c.get("text", "").replace("\n", " ").strip()
                         docs_text += f"\n*{i}. {q}*\n{t[:150]}...\n"
                     answer += docs_text
             except Exception as e:
                 print(f"[Pipeline] failed to append docs: {e}")
 
         # ── 7. Return answer + real metadata as JSON ─────────────────────────
-        return json.dumps({
-            "final_answer": answer,
-            "meta": {
-                "results":      results_count,
-                "bm25_used":    bm25_used,
-                "serper_count": serper_count,
-                "halluc_warn":  halluc_warning,
-                "web_sources":  web_sources,   # full list with title+url for UI
+        result = json.dumps(
+            {
+                "final_answer": answer,
+                "meta": {
+                    "results": results_count,
+                    "bm25_used": bm25_used,
+                    "serper_count": serper_count,
+                    "halluc_warn": halluc_warning,
+                    "web_sources": web_sources,  # full list with title+url for UI
+                },
             },
-        }, ensure_ascii=False)
-            
+            ensure_ascii=False,
+        )
+
+        elapsed = time.time() - t0
+        try:
+            mlflow.log_metric("elapsed_time", elapsed)
+            mlflow.log_metric("results_count", results_count)
+            mlflow.log_metric("bm25_used", int(bm25_used))
+            mlflow.log_metric("serper_count", serper_count)
+            mlflow.log_metric("hallucination_warning", int(halluc_warning))
+            mlflow.log_metric("answer_length", len(answer))
+            mlflow.set_tag("category", cat_display)
+            mlflow.set_tag("language", detected if "detected" in dir() else "unknown")
+            mlflow.end_run()
+        except Exception:
+            pass
+
+        return result

@@ -1,6 +1,7 @@
 """
 Arabic Medical Chatbot — Telegram Bot Interface
-Runs the same crew.run() pipeline as the Streamlit app.
+Runs the same crew.run() pipeline as the Streamlit app,
+including AraBERT entity extraction and MLflow tracing.
 
 Run:  python telegram_bot/bot.py
 """
@@ -36,9 +37,9 @@ _crew = None
 
 def get_crew():
     """
-    Description: This function loads our CrewAI setup only once. 
-    It's extremely helpful for performance since we don't want to reinitialize 
-    the heavy models on every single message.
+    Load CrewAI pipeline once (lazy singleton).
+    The pipeline includes AraBERT embeddings, entity extraction,
+    and MLflow tracing — all initialized automatically.
     """
     global _crew
     if _crew is None:
@@ -59,35 +60,22 @@ MODES = {
 user_state: dict[int, dict] = {}
 
 def state(user_id: int) -> dict:
-    """
-    Description: This keeps track of each user's separate conversation history 
-    and selected retrieval mode, ensuring personalized sessions.
-    """
+    """Get or create per-user conversation state."""
     if user_id not in user_state:
         user_state[user_id] = {"mode": "hybrid", "history": []}
     return user_state[user_id]
 
 # ── Helper: strip HTML tags for plain Telegram Markdown ──────────────────────
 def clean_for_telegram(text: str) -> str:
-    """
-    Description: Telegram markdown has specific formatting rules. We use this 
-    function to strip raw HTML and convert bolding syntax so the generated 
-    answer looks clean and readable for the user.
-    """
+    """Clean response for Telegram markdown display."""
     text = re.sub(r"<[^>]+>", "", text)           # remove any HTML
     text = re.sub(r"\n{3,}", "\n\n", text)         # collapse excess newlines
-    # Make bullet points cleaner
     text = text.replace("•", "•")
-    # Bold section headers written as "**Title:**"
     text = re.sub(r"\*\*(.+?)\*\*", r"*\1*", text)  # ** → * (Telegram Markdown)
     return text.strip()
 
 def split_refs(text: str):
-    """
-    Description: Here we slice the bot's response into two distinct parts: 
-    the actual answer and the references block. This lets us format the 
-    references nicely at the bottom of the Telegram message.
-    """
+    """Split answer body from references section."""
     if "📚 المراجع:" in text:
         parts = text.split("📚 المراجع:", 1)
         return parts[0].strip(), parts[1].strip()
@@ -95,15 +83,15 @@ def split_refs(text: str):
 
 # ── Commands ──────────────────────────────────────────────────────────────────
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """
-    Description: The /start command is the user's first interaction. 
-    We welcome them and list the available commands to guide their experience.
-    """
+    """Welcome message with available commands."""
     uid = update.effective_user.id
     state(uid)  # init
     await update.message.reply_text(
         "السلام عليكم! 👋\n\n"
-        "أنا *المساعد الطبي العربي* — نظام ذكاء اصطناعي متخصص للإجابة على أسئلتك الطبية باللغة العربية.\n\n"
+        "أنا *المساعد الطبي العربي* — نظام ذكاء اصطناعي متخصص للإجابة على أسئلتك الطبية.\n\n"
+        "🔬 يستخدم *AraBERT* للفهم العميق للمصطلحات الطبية العربية\n"
+        "🎯 يستخرج اسم المرض تلقائياً من سؤالك\n"
+        "📊 يتتبع أداء كل استعلام عبر MLflow\n\n"
         "📌 *الأوامر المتاحة:*\n"
         "/mode — اختر مصدر الاسترجاع\n"
         "/clear — مسح سياق المحادثة\n"
@@ -113,10 +101,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
 
 async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """
-    Description: Provide a quick reference and disclaimer whenever the user 
-    is confused or types /help. Always keep safety disclaimers visible!
-    """
+    """Help message with current mode and disclaimer."""
     uid = update.effective_user.id
     current = MODES[state(uid)["mode"]]
     await update.message.reply_text(
@@ -126,16 +111,16 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "/mode — تغيير مصدر الاسترجاع (RAG / BM25 / إنترنت / هجين / الكل)\n"
         "/clear — مسح ذاكرة المحادثة\n"
         "/start — رسالة الترحيب\n\n"
+        "📊 *MLflow Tracing:* كل استعلام يُسجَّل تلقائياً مع:\n"
+        "  • الكيان المرضي المستخرج\n"
+        "  • زمن الاستجابة\n"
+        "  • نتائج فحص الهلوسة\n\n"
         "⚕️ هذا النظام للأغراض التعليمية فقط ولا يُغني عن استشارة الطبيب.",
         parse_mode="Markdown",
     )
 
 async def cmd_mode(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """
-    Description: This sends an interactive inline keyboard to the user, 
-    allowing them to instantly toggle between different retrieval strategies 
-    like RAG or hybrid search.
-    """
+    """Show inline keyboard for retrieval mode selection."""
     kbd = [
         [InlineKeyboardButton(label, callback_data=f"mode:{key}")]
         for key, label in MODES.items()
@@ -147,19 +132,13 @@ async def cmd_mode(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
 
 async def cmd_clear(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """
-    Description: Sometimes conversations go off track. This resets the chat 
-    history for the user so they can start fresh without previous context.
-    """
+    """Clear conversation history for the user."""
     uid = update.effective_user.id
     state(uid)["history"] = []
     await update.message.reply_text("✅ تم مسح سياق المحادثة.")
 
 async def callback_mode(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """
-    Description: This handler naturally catches the button clicks generated 
-    by the /mode command and safely updates the user's current retrieval state.
-    """
+    """Handle inline keyboard mode selection callback."""
     query = update.callback_query
     await query.answer()
     uid = query.from_user.id
@@ -170,17 +149,16 @@ async def callback_mode(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # ── Main message handler ──────────────────────────────────────────────────────
 async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """
-    Description: This is the core logic pipeline. We receive the user's message, 
-    dispatch it to our AI crew in a background thread (so we don't freeze the bot),
-    and continuously update the user with real-time progress indicators.
+    Core pipeline handler. Dispatches query to AI crew in background thread,
+    shows real-time progress with entity extraction and MLflow tracking info.
     """
     uid   = update.effective_user.id
     s     = state(uid)
     query = update.message.text.strip()
 
-    import re
+    import re as _re
     # Ignore standalone emojis or empty text
-    if not query or len(re.sub(r'[^\w\s]', '', query).strip()) == 0:
+    if not query or len(_re.sub(r'[^\w\s]', '', query).strip()) == 0:
         await update.message.reply_text("عذراً، الرجاء كتابة سؤال طبي واضح.")
         return
 
@@ -194,22 +172,19 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     # Build step log for progress
     steps_log: list[str] = []
 
-    # The progress callback is called from the background thread,
-    # so we must schedule the Telegram message edit on the main loop safely.
     def on_progress(step, label, detail=""):
         entry = f"{label}" + (f" — {detail}" if detail else "")
         if entry not in steps_log:
             steps_log.append(entry)
             text = "⏳ جارٍ تحليل سؤالك...\n\n" + "\n".join(f"  {s}" for s in steps_log)
-            # Fire and forget the edit_text to avoid blocking the worker thread
             asyncio.run_coroutine_threadsafe(proc_msg.edit_text(text), loop)
 
     try:
         crew = get_crew()
         import json, time
         t0 = time.time()
-        
-        # CrewAI is synchronous and blocks the event loop! Must run in a thread.
+
+        # CrewAI is synchronous — must run in a thread to avoid blocking
         raw = await asyncio.to_thread(
             crew.run,
             query,
@@ -256,7 +231,7 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 disable_web_page_preview=True,
             )
 
-        # Send pipeline summary footer
+        # Send pipeline summary footer with entity info
         if meta:
             results  = meta.get("results", 0)
             bm25     = "نعم" if meta.get("bm25_used") else "لا"
@@ -282,10 +257,7 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 def main():
-    """
-    Mentor note: The main entry point for the Application builder. It links 
-    all of our defined commands and message handlers, firing up the bot lifecycle.
-    """
+    """Start the Telegram bot with all handlers."""
     token = os.getenv("TELEGRAM_BOT_TOKEN", "")
     if not token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN not set in .env")
@@ -300,6 +272,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     logger.info("🤖 Arabic Medical Bot is running — press Ctrl+C to stop")
+    logger.info("📊 MLflow tracing is enabled — check MLflow UI for agent flow")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":

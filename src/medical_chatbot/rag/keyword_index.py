@@ -23,18 +23,37 @@ BM25_INDEX_PATH = os.getenv("BM25_INDEX_PATH", "indexes/bm25_index.pkl")
 TOP_K           = int(os.getenv("TOP_K", "5"))
 
 
+# Arabic stopwords to remove from BM25 tokenization so matching focuses on
+# disease names and medical terms, not question words like "ما" or "هي"
+ARABIC_STOPWORDS = {
+    # Question words
+    "ما", "هي", "هو", "هل", "كيف", "لماذا", "متى", "أين", "من",
+    # Prepositions & conjunctions
+    "في", "عن", "على", "إلى", "مع", "أو", "و", "ب", "ل", "ك",
+    "بها", "لها", "فيها", "منها", "عنها",
+    # Demonstratives & relatives
+    "هذا", "هذه", "ذلك", "تلك", "الذي", "التي",
+    # Verbs & auxiliaries
+    "يكون", "كان", "ليس", "يمكن", "قد", "لا", "نعم",
+    "فقط", "أيضا", "جدا", "بعض", "كل", "أي", "يتم",
+    # Single chars
+    "أ", "ا", "ي",
+}
+
+
 # Description: A custom text cleanser! It rips out diacritics and punctuation so that the keyword search doesn't fail over simple grammar differences.
 def _tokenize_arabic(text: str) -> List[str]:
     """
-    Simple Arabic whitespace + punctuation tokenizer.
-    Removes diacritics and normalizes for BM25 matching.
+    Arabic tokenizer for BM25 matching.
+    Removes diacritics, punctuation, and common stopwords
+    so BM25 focuses on medical/disease terms.
     """
     # Remove Arabic diacritics (tashkeel)
     text = re.sub(r"[\u0610-\u061A\u064B-\u065F]", "", text)
     # Remove punctuation and numbers
     text = re.sub(r"[^\u0600-\u06FF\u0750-\u077F\s]", " ", text)
     tokens = text.split()
-    return [t for t in tokens if len(t) > 1]
+    return [t for t in tokens if len(t) > 1 and t not in ARABIC_STOPWORDS]
 
 
 # Description: This class wraps our sparse keyword retrieval system, perfect as a fallback when the sophisticated vector search gets confused.
