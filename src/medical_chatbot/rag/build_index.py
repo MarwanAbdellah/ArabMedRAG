@@ -109,7 +109,7 @@ def main() -> None:
     logger.info("=" * 60)
     embedder = get_embedder()
     texts    = [m["text"] for m in metadata]
-    vectors  = embedder.embed(texts)
+    vectors  = embedder.embed_documents(texts)  # uses "passage: " prefix for E5 models
 
     faiss_store = FAISSVectorStore(embedding_dim=embedder.embedding_dim)
     faiss_store.build(vectors, metadata)

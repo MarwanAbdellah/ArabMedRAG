@@ -25,6 +25,29 @@ from pydantic import BaseModel, Field
 logger = logging.getLogger(__name__)
 
 TOP_K             = int(os.getenv("TOP_K", "5"))
+
+
+def _entity_in_result(disease_entity: str, meta: dict) -> bool:
+    """Return True if key words from disease_entity appear in the result question or text.
+
+    Uses 5-char threshold to exclude short Arabic grammar words (e.g. مرض=4 chars)
+    while matching meaningful disease terms (e.g. السكر=6, السرطان=7).
+    """
+    content_words: list[str] = []
+    for word in disease_entity.split():
+        if len(word) >= 5:
+            content_words.append(word)
+            # Also try root without definite article ال
+            if word.startswith("ال") and len(word) > 4:
+                root = word[2:]
+                if len(root) >= 3:
+                    content_words.append(root)
+    if not content_words:
+        return True  # entity too short to be discriminative — allow all
+    combined = (meta.get("question", "") + " " + meta.get("text", "")).lower()
+    return any(w.lower() in combined for w in content_words)
+
+
 VECTOR_THRESHOLD  = float(os.getenv("VECTOR_THRESHOLD", "0.50"))
 ENTITY_BOOST      = float(os.getenv("ENTITY_BOOST", "1.3"))
 
@@ -112,6 +135,11 @@ class HybridSearchTool(BaseTool):
                 # Boost BM25 results that match the entity
                 if has_entity and cid in entity_chunk_ids:
                     normalized_score *= ENTITY_BOOST
+                # When entity is known, reject BM25 results that don't mention it
+                # (prevents e.g. "مرض السل" from appearing in a "السكر" query)
+                if has_entity and cid not in entity_chunk_ids:
+                    if not _entity_in_result(disease_entity, meta):
+                        continue
                 if cid not in results and normalized_score >= relevance_threshold:
                     results[cid] = (meta, normalized_score)
 

@@ -20,8 +20,6 @@ import time
 import json
 
 import mlflow
-import mlflow.langchain
-from mlflow.tracing import fluent
 
 from crewai import Agent, Crew, Process, Task, LLM
 from crewai.project import CrewBase, agent, crew, task
@@ -62,11 +60,13 @@ def _clean_arabic_response(text: str) -> str:
     text = _re.sub(r'[\u3040-\u309f\u30a0-\u30ff]', '', text)
     # Remove Korean
     text = _re.sub(r'[\uac00-\ud7af]', '', text)
-    # Normalize excessive whitespace
-    text = _re.sub(r'\s+', ' ', text).strip()
-    # Fix double newlines that may result from character removal
-    text = _re.sub(r'\n\s*\n\s*\n', '\n\n', text)
-    return text
+    # Normalize horizontal whitespace only — preserve newlines
+    text = _re.sub(r'[^\S\n]+', ' ', text)
+    # Collapse 3+ consecutive newlines to 2
+    text = _re.sub(r'\n{3,}', '\n\n', text)
+    # Ensure bullet points each get their own line
+    text = _re.sub(r'\s*([•\-])\s+', r'\n\1 ', text)
+    return text.strip()
 
 # Always resolve .env relative to project root (two levels above this file)
 _ENV_PATH = pathlib.Path(__file__).parent.parent.parent / ".env"
@@ -74,18 +74,22 @@ load_dotenv(dotenv_path=str(_ENV_PATH), override=True)
 
 
 def _setup_mlflow():
-    """Initialize MLflow tracking if configured."""
+    """Initialize MLflow tracking + GenAI tracing if configured."""
     mlflow_enabled = os.getenv("MLFLOW_ENABLED", "false").lower() == "true"
     if not mlflow_enabled:
         return None
 
-    import mlflow.crewai
-
-    mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5000"))
+    uri = os.getenv("MLFLOW_TRACKING_URI", "sqlite:///mlflow.db")
+    mlflow.set_tracking_uri(uri)
     experiment_name = os.getenv("MLFLOW_EXPERIMENT_NAME", "arabic_medical_chatbot")
     mlflow.set_experiment(experiment_name)
 
-    mlflow.crewai.autolog()
+    # Enable litellm autologging so every litellm.completion() call is traced
+    try:
+        from mlflow import litellm as _mlflow_litellm
+        _mlflow_litellm.autolog(log_traces=True)
+    except Exception as _e:
+        logger.debug(f"mlflow.litellm.autolog unavailable: {_e}")
 
     if mlflow.active_run():
         mlflow.end_run()
@@ -267,6 +271,17 @@ class arabic_chatbot:
         mlflow_run = _setup_mlflow()
         t0 = time.time()
 
+        # Start a GenAI root trace span for the full pipeline
+        _root_span = None
+        try:
+            _root_span = mlflow.start_span(
+                name="arabic_medical_pipeline",
+                span_type="CHAIN",
+                inputs={"query": query, "mode": mode},
+            )
+        except Exception:
+            pass
+
         def _progress(step, label, detail=""):
             if on_progress:
                 on_progress(step, label, detail)
@@ -357,6 +372,13 @@ class arabic_chatbot:
                 try:
                     mlflow.log_metric("elapsed_time", time.time() - t0)
                     mlflow.set_tag("intent", "greeting")
+                    mlflow.end_run()
+                except Exception:
+                    pass
+                try:
+                    if _root_span is not None:
+                        _root_span.set_outputs({"intent": "greeting"})
+                        _root_span.end()
                 except Exception:
                     pass
                 return result
@@ -366,6 +388,13 @@ class arabic_chatbot:
                 try:
                     mlflow.log_metric("elapsed_time", time.time() - t0)
                     mlflow.set_tag("intent", "non_medical")
+                    mlflow.end_run()
+                except Exception:
+                    pass
+                try:
+                    if _root_span is not None:
+                        _root_span.set_outputs({"intent": "non_medical"})
+                        _root_span.end()
                 except Exception:
                     pass
                 return result
@@ -419,6 +448,13 @@ class arabic_chatbot:
                 mlflow.log_metric("elapsed_time", time.time() - t0)
                 mlflow.set_tag("emergency", "true")
                 mlflow.set_tag("category", cat_display)
+                mlflow.end_run()
+            except Exception:
+                pass
+            try:
+                if _root_span is not None:
+                    _root_span.set_outputs({"intent": "emergency"})
+                    _root_span.end()
             except Exception:
                 pass
             return result
@@ -629,10 +665,10 @@ class arabic_chatbot:
             f"5. كل معلومة يجب أن تكون مدعومة بالسياق المسترجع، ولا تخترع أي معلومة من خارج السياق.\n"
             f"6. إذا لم تجد المعلومة في السياق، قل: «هذه المعلومة غير متوفرة في المصادر المتاحة وتحتاج إلى مراجعة متخصص.»\n"
             f"7. بعد الانتهاء من الإجابة الطبية، اعرض التصنيف وسبب اختياره في هذا الشكل البارز بالضبط:\n"
-            f"   ══════════════════════════════\n"
+            f"   ══════════════\n"
             f"   📂 التصنيف الطبي: {cat_label}\n"
             f"   💡 سبب التصنيف: [اكتب هنا باللغة العربية حصراً في سطر واحد مبررًا طبيًا موجزًا يوضح سبب انتماء الحالة لهذا التصنيف]\n"
-            f"   ══════════════════════════════\n"
+            f"   ══════════════\n"
             + (
                 f"8. **هام جداً:** السياق المسترجع الحالي يُعتبر غير مفيد أو غير كافٍ للرد على سؤال المستخدم. يرجى توضيح ذلك بلباقة للمستخدم واقترح عليه تغيير وضع البحث إلى 'الكل' (All) للبحث في الإنترنت، أو إعادة صياغة السؤال.\n"
                 if context_rejected
@@ -688,8 +724,8 @@ class arabic_chatbot:
                 sd = json.loads(search_json)
                 chunks = sd.get("chunks", [])
                 if chunks:
-                    docs_text = "\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                    docs_text += "📑 **المصادر الطبية المسترجعة من قاعدة البيانات:**\n"
+                    docs_text = "\n\n━━━━━━━━━━━━━━━\n"
+                    docs_text += "📑 *المصادر الطبية المسترجعة:*\n"
                     for i, c in enumerate(chunks, 1):
                         q = c.get("question", "").replace("\n", " ").strip()
                         t = c.get("text", "").replace("\n", " ").strip()
@@ -724,6 +760,18 @@ class arabic_chatbot:
             mlflow.set_tag("category", cat_display)
             mlflow.set_tag("language", detected if "detected" in dir() else "unknown")
             mlflow.end_run()
+        except Exception:
+            pass
+
+        # Close the GenAI root span
+        try:
+            if _root_span is not None:
+                _root_span.set_outputs({
+                    "answer_length": len(answer),
+                    "results_count": results_count,
+                    "elapsed_seconds": round(elapsed, 2),
+                })
+                _root_span.end()
         except Exception:
             pass
 

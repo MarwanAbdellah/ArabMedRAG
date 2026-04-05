@@ -69,6 +69,16 @@ def state(user_id: int) -> dict:
 def clean_for_telegram(text: str) -> str:
     """Clean response for Telegram markdown display."""
     text = re.sub(r"<[^>]+>", "", text)           # remove any HTML
+    # Ensure Islamic greeting is followed by a blank line
+    text = re.sub(
+        r"(السلام عليكم(?:\s+ورحمة\s+الله(?:\s+وبركاته)?)?[.،]?)\s*",
+        r"\1\n\n",
+        text,
+    )
+    # Shorten long Unicode box-drawing dividers (cap at 15 chars)
+    text = re.sub(r"━{4,}", "━━━━━━━━━━━━━━━", text)
+    text = re.sub(r"═{4,}", "═══════════════", text)
+    text = re.sub(r"─{4,}", "───────────────", text)
     text = re.sub(r"\n{3,}", "\n\n", text)         # collapse excess newlines
     text = text.replace("•", "•")
     text = re.sub(r"\*\*(.+?)\*\*", r"*\1*", text)  # ** → * (Telegram Markdown)
