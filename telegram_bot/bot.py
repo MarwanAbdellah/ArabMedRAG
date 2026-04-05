@@ -1,7 +1,7 @@
 """
 Arabic Medical Chatbot — Telegram Bot Interface
-Runs the same crew.run() pipeline as the Streamlit app,
-including AraBERT entity extraction and MLflow tracing.
+Runs the crew.run() pipeline (E5-multilingual embeddings,
+hybrid RAG, smart caching, MLflow tracing).
 
 Run:  python telegram_bot/bot.py
 """
@@ -38,8 +38,8 @@ _crew = None
 def get_crew():
     """
     Load CrewAI pipeline once (lazy singleton).
-    The pipeline includes AraBERT embeddings, entity extraction,
-    and MLflow tracing — all initialized automatically.
+    The pipeline includes E5-multilingual embeddings, entity extraction,
+    smart caching, and MLflow tracing — all initialized automatically.
     """
     global _crew
     if _crew is None:
@@ -99,30 +99,40 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "السلام عليكم! 👋\n\n"
         "أنا *المساعد الطبي العربي* — نظام ذكاء اصطناعي متخصص للإجابة على أسئلتك الطبية.\n\n"
-        "🔬 يستخدم *AraBERT* للفهم العميق للمصطلحات الطبية العربية\n"
-        "🎯 يستخرج اسم المرض تلقائياً من سؤالك\n"
+        "🔬 يستخدم *E5-Multilingual* للبحث الدلالي في المصطلحات الطبية\n"
+        "🧩 يفهم الأسئلة الطبية وأوصاف الأعراض والتاريخ المرضي\n"
+        "⚡ ذاكرة تخزين مؤقت ذكية للأسئلة المتكررة\n"
         "📊 يتتبع أداء كل استعلام عبر MLflow\n\n"
         "📌 *الأوامر المتاحة:*\n"
         "/mode — اختر مصدر الاسترجاع\n"
-        "/clear — مسح سياق المحادثة\n"
-        "/help — مساعدة\n\n"
+        "/clear — مسح سياق المحادثة والذاكرة المؤقتة\n"
+        "/help — مساعدة وإحصائيات الكاش\n\n"
         "ابدأ بكتابة سؤالك الطبي مباشرة ✍️",
         parse_mode="Markdown",
     )
 
 async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Help message with current mode and disclaimer."""
+    """Help message with current mode, cache stats, and disclaimer."""
     uid = update.effective_user.id
     current = MODES[state(uid)["mode"]]
+    try:
+        from src.medical_chatbot.cache import get_cache
+        cs = get_cache().stats()
+        cache_line = (
+            f"\n⚡ *ذاكرة التخزين المؤقت:* {cs['size']}/{cs['max_size']} "
+            f"(معدل الإصابة: {cs['hit_rate']:.0%})"
+        )
+    except Exception:
+        cache_line = ""
     await update.message.reply_text(
         f"🤖 *المساعد الطبي العربي*\n\n"
-        f"الوضع الحالي: {current}\n\n"
+        f"الوضع الحالي: {current}{cache_line}\n\n"
         "الأوامر:\n"
         "/mode — تغيير مصدر الاسترجاع (RAG / BM25 / إنترنت / هجين / الكل)\n"
         "/clear — مسح ذاكرة المحادثة\n"
         "/start — رسالة الترحيب\n\n"
         "📊 *MLflow Tracing:* كل استعلام يُسجَّل تلقائياً مع:\n"
-        "  • الكيان المرضي المستخرج\n"
+        "  • الكيان المرضي المستخرج (مرض / أعراض / تاريخ مريض)\n"
         "  • زمن الاستجابة\n"
         "  • نتائج فحص الهلوسة\n\n"
         "⚕️ هذا النظام للأغراض التعليمية فقط ولا يُغني عن استشارة الطبيب.",
@@ -142,10 +152,16 @@ async def cmd_mode(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
 
 async def cmd_clear(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Clear conversation history for the user."""
+    """Clear conversation history and flush the query cache."""
     uid = update.effective_user.id
     state(uid)["history"] = []
-    await update.message.reply_text("✅ تم مسح سياق المحادثة.")
+    try:
+        from src.medical_chatbot.cache import get_cache
+        get_cache().clear()
+        cache_note = " والذاكرة المؤقتة"
+    except Exception:
+        cache_note = ""
+    await update.message.reply_text(f"✅ تم مسح سياق المحادثة{cache_note}.")
 
 async def callback_mode(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Handle inline keyboard mode selection callback."""
@@ -241,20 +257,24 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 disable_web_page_preview=True,
             )
 
-        # Send pipeline summary footer with entity info
-        if meta:
-            results  = meta.get("results", 0)
-            bm25     = "نعم" if meta.get("bm25_used") else "لا"
-            serper   = meta.get("serper_count", 0)
-            mode_lbl = MODES.get(s["mode"], s["mode"])
+        # Send pipeline summary footer
+        if meta or elapsed < 2:
+            results   = meta.get("results", 0)
+            bm25      = "نعم" if meta.get("bm25_used") else "لا"
+            serper    = meta.get("serper_count", 0)
+            cache_hit = meta.get("cache_hit", False)
+            mode_lbl  = MODES.get(s["mode"], s["mode"])
 
             footer_parts = [f"🔍 {mode_lbl}", f"⏱️ {elapsed}ث"]
-            if s["mode"] in ("rag", "hybrid", "all"):
-                footer_parts.append(f"📌 RAG: {results}")
-            if s["mode"] in ("bm25", "hybrid", "all"):
-                footer_parts.append(f"🔑 BM25: {bm25}")
-            if s["mode"] in ("internet", "all") and serper:
-                footer_parts.append(f"🌐 إنترنت: {serper}")
+            if cache_hit:
+                footer_parts.append("⚡ كاش")
+            else:
+                if s["mode"] in ("rag", "hybrid", "all"):
+                    footer_parts.append(f"📌 RAG: {results}")
+                if s["mode"] in ("bm25", "hybrid", "all"):
+                    footer_parts.append(f"🔑 BM25: {bm25}")
+                if s["mode"] in ("internet", "all") and serper:
+                    footer_parts.append(f"🌐 إنترنت: {serper}")
 
             await update.message.reply_text(
                 " | ".join(footer_parts),

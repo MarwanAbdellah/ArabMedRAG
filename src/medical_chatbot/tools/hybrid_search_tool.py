@@ -77,12 +77,25 @@ class HybridSearchTool(BaseTool):
         # ── Step 0: Extract disease entity ─────────────
         entity_info = extract_disease_entity(query)
         disease_entity = entity_info.get("disease_entity", "")
-        has_entity = (
-            disease_entity
-            and disease_entity != query
-            and entity_info.get("extraction_method") == "pattern"
+        query_intent   = entity_info.get("query_intent", "general")
+        is_pattern     = entity_info.get("extraction_method") == "pattern"
+
+        # Always use entity vector search when we have a clean extracted phrase.
+        use_entity_vector = bool(disease_entity and disease_entity != query and is_pattern)
+
+        # For symptom_description / clinical_history the retrieved chunks describe
+        # the *disease* — they will NOT literally contain the patient's symptom phrase.
+        # Disable entity-presence filtering so we don't discard relevant chunks.
+        use_entity_filter = (
+            use_entity_vector
+            and query_intent not in ("symptom_description", "clinical_history")
         )
-        logger.info(f"Disease entity: '{disease_entity}' (has_entity={has_entity})")
+
+        has_entity = use_entity_filter  # backward-compat alias used in BM25 block
+        logger.info(
+            f"Entity: '{disease_entity}' intent={query_intent} "
+            f"vec={use_entity_vector} filter={use_entity_filter}"
+        )
 
         # ── Step 1: Vector search (full query) ─────────
         embedder     = get_embedder()
@@ -102,7 +115,7 @@ class HybridSearchTool(BaseTool):
 
         # ── Step 1b: Entity-focused vector search ──────
         entity_chunk_ids: set[int] = set()
-        if has_entity:
+        if use_entity_vector:
             entity_vec = embedder.embed_query(disease_entity)
             entity_hits = vector_store.search(entity_vec, k=search_k)
             logger.info(f"Entity search for '{disease_entity}': {len(entity_hits)} hits")
@@ -169,7 +182,8 @@ class HybridSearchTool(BaseTool):
 
         output = {
             "query":              query,
-            "disease_entity":     disease_entity if has_entity else None,
+            "disease_entity":     disease_entity if use_entity_vector else None,
+            "query_intent":       query_intent,
             "total_results":      len(chunks),
             "used_bm25_fallback": used_bm25,
             "top_similarity":     round(top_score, 4),

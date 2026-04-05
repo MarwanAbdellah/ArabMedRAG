@@ -3,17 +3,10 @@ embedding_pipeline.py
 ────────────────────────────────────────────────
 Generates dense vector embeddings for Arabic medical retrieval.
 
-Supports two model families:
-
-1. intfloat/multilingual-e5-base  (DEFAULT — recommended)
-   Fine-tuned via contrastive learning on 1B+ multilingual pairs.
-   Uses asymmetric query: / passage: prefixes for retrieval.
-   Typically +25-40% NDCG over a raw masked-language-model baseline.
-
-2. aubmindlab/bert-base-arabertv2  (legacy)
-   Raw MLM — mean-pooled but NOT fine-tuned for retrieval.
-   Scores for relevant Arabic pairs stay around 0.55-0.72, causing
-   high RELEVANCE_THRESHOLD to filter out correct results.
+Uses intfloat/multilingual-e5-base (DEFAULT):
+  Fine-tuned via contrastive learning on 1B+ multilingual pairs.
+  Uses asymmetric query: / passage: prefixes for retrieval.
+  Typically +25-40% NDCG over raw masked-language-model baselines.
 """
 
 from __future__ import annotations
@@ -61,7 +54,7 @@ class DocumentEmbedder:
 
     @property
     def embedding_dim(self) -> int:
-        return self.model.config.hidden_size  # 768 for both E5-base and AraBERT-base
+        return self.model.config.hidden_size  # 768 for E5-base
 
     def _mean_pooling(self, model_output, attention_mask) -> torch.Tensor:
         """Attention-mask-weighted mean pool over token embeddings."""

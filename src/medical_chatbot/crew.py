@@ -36,6 +36,7 @@ from src.medical_chatbot.tools.disease_entity_extractor import (
     extract_disease_entity,
     DiseaseEntityExtractorTool,
 )
+from src.medical_chatbot.cache import get_cache
 
 logger = logging.getLogger(__name__)
 
@@ -356,19 +357,12 @@ class arabic_chatbot:
             )
             intent_ans = (intent_resp.choices[0].message.content or "").strip()
             if "تحية" in intent_ans:
-                _progress("intent", "👋 تحية", "توليد الرد للتحية...")
-                greet_resp = litellm.completion(
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": f"رد على هذه التحية أو الرسالة الودية بلغة المرسل وبشكل مهذب ومختصر كطبيب، بدون إضافة معلومات طبية:\n{query}",
-                        }
-                    ],
-                    max_tokens=100,
-                    temperature=0.5,
-                    **kwargs,
+                _progress("intent", "👋 تحية", "رد فوري على التحية...")
+                result = (
+                    "السلام عليكم ورحمة الله وبركاته! 😊\n"
+                    "أنا مساعدك الطبي الذكي. يسعدني الإجابة على أسئلتك الطبية.\n"
+                    "تفضل بسؤالك وسأبذل قصارى جهدي لمساعدتك! ✍️"
                 )
-                result = (greet_resp.choices[0].message.content or "").strip()
                 try:
                     mlflow.log_metric("elapsed_time", time.time() - t0)
                     mlflow.set_tag("intent", "greeting")
@@ -458,6 +452,34 @@ class arabic_chatbot:
             except Exception:
                 pass
             return result
+
+        # ── 2.7. Cache lookup ────────────────────────────────────────────────────
+        _cache = get_cache()
+        cached = _cache.get(query, mode=mode, intent=query_intent)
+        if cached is not None:
+            _progress("cache", "⚡ نتيجة مخزنة", "استرجاع من الذاكرة المؤقتة...")
+            print(f"[Pipeline] cache HIT  (mode={mode}, intent={query_intent})")
+            # Inject cache_hit flag so the UI can show the ⚡ indicator
+            try:
+                _cd = json.loads(cached)
+                _cd.setdefault("meta", {})["cache_hit"] = True
+                cached = json.dumps(_cd, ensure_ascii=False)
+            except Exception:
+                pass
+            try:
+                mlflow.set_tag("cache_hit", "true")
+                mlflow.log_metric("elapsed_time", time.time() - t0)
+                mlflow.end_run()
+            except Exception:
+                pass
+            try:
+                if _root_span is not None:
+                    _root_span.set_outputs({"cache_hit": True})
+                    _root_span.end()
+            except Exception:
+                pass
+            return cached
+        print(f"[Pipeline] cache MISS (mode={mode}, intent={query_intent})")
 
         # ── 3. Retrieval (mode-aware) ──────────────────────────────────────────────
         results_count, bm25_used = 0, False
@@ -739,11 +761,12 @@ class arabic_chatbot:
             {
                 "final_answer": answer,
                 "meta": {
-                    "results": results_count,
-                    "bm25_used": bm25_used,
+                    "results":      results_count,
+                    "bm25_used":    bm25_used,
                     "serper_count": serper_count,
-                    "halluc_warn": halluc_warning,
-                    "web_sources": web_sources,  # full list with title+url for UI
+                    "halluc_warn":  halluc_warning,
+                    "web_sources":  web_sources,
+                    "cache_hit":    False,
                 },
             },
             ensure_ascii=False,
@@ -774,5 +797,12 @@ class arabic_chatbot:
                 _root_span.end()
         except Exception:
             pass
+
+        # ── Store successful result in cache ──────────────────────────────────
+        try:
+            _cache.put(query, mode=mode, intent=query_intent, result=result)
+            print(f"[Pipeline] cached result (mode={mode}, intent={query_intent})")
+        except Exception as _ce:
+            print(f"[Pipeline] cache store failed: {_ce}")
 
         return result
