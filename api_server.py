@@ -118,6 +118,7 @@ class HealthResponse(BaseModel):
     model: str
     embedding_model: str
     index_loaded: bool
+    version: str = "1.0.0"
 
 
 # ─────────────────────────────────────────────────────
@@ -177,6 +178,7 @@ async def health_check():
         model=os.getenv("OPENROUTER_MODEL", os.getenv("OLLAMA_MODEL", "unknown")),
         embedding_model=os.getenv("EMBEDDING_MODEL", "aubmindlab/bert-base-arabertv2"),
         index_loaded=_crew is not None,
+        version="1.0.1",
     )
 
 
