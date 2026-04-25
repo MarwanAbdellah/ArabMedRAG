@@ -106,10 +106,7 @@ graduation_final/
 ├── app.py                      # Streamlit web UI (RTL Arabic chat)
 ├── api_server.py               # FastAPI REST API (port 8000)
 ├── api_keys.json               # API key store (git-ignored in prod)
-├── Dockerfile                  # Container image (python:3.11-slim)
-├── docker-compose.yml          # Two-service stack: api + telegram bot
-├── environment.yml             # Conda environment (Python 3.10)
-├── requirements.txt            # Pip dependencies (for Docker)
+├── requirements.txt            # Pip dependencies (installed into venv on EC2)
 ├── README.md                   # User-facing quickstart
 ├── TECHNICAL_DOCS.md           # This file
 ├── test_eval.py                # LLM-as-judge evaluation harness
@@ -159,7 +156,7 @@ graduation_final/
 │   └── book.tex               # compile: pdflatex book.tex (×2)
 │
 └── .github/workflows/
-    └── docker-build.yml       # CI: build → GHCR → EC2 SSH deploy
+    └── deploy.yml             # CI: SSH into EC2, run ~/deploy.sh (git pull + restart screen sessions)
 ```
 
 ---
@@ -584,51 +581,27 @@ citations   = CitationGroundingTool()._run(tool_result)
 
 Writes `eval_results.json` with retrieved chunks + relevance judgement. The LLM-as-judge pattern (using a separate, strong model to evaluate outputs) avoids manual annotation for quick iteration.
 
-### `Dockerfile`
+### `.github/workflows/deploy.yml`
 
-```dockerfile
-FROM python:3.11-slim
-RUN apt-get install build-essential   # needed for faiss-cpu compilation
-COPY requirements.txt .
-RUN pip install -r requirements.txt
-COPY . /app
-EXPOSE 8000
-HEALTHCHECK CMD curl /api/v1/health
-CMD ["uvicorn", "api_server:app", "--host", "0.0.0.0", "--port", "8000"]
-```
-
-Uses `python:3.11-slim` rather than conda — lighter image, CI-compatible. `build-essential` is required because `faiss-cpu` builds a C extension from source.
-
-### `docker-compose.yml`
-
-```yaml
-services:
-  api:
-    image: ghcr.io/marwanabdellah/graduation_final:latest
-    ports: ["8000:8000"]
-    volumes:
-      - ./indexes:/app/indexes    # mount pre-built indexes
-      - ./.env:/app/.env
-      - ./api_keys.json:/app/api_keys.json
-
-  bot:
-    image: ghcr.io/marwanabdellah/graduation_final:latest
-    command: python telegram_bot/bot.py
-    depends_on: [api]
-```
-
-Both services use the same image; the bot overrides the default `CMD`. Index files are bind-mounted so they don't need to be baked into the image (341 K vectors ≈ hundreds of MB).
-
-### `.github/workflows/docker-build.yml`
-
-Triggers on push to `main`/`master` or manual dispatch.
+Triggers on push to `main`/`master` or manual dispatch. Completes in under 30 seconds.
 
 Steps:
-1. `actions/setup-python@v5` (Python 3.11) — install requirements.
-2. **Smoke test**: `python -c "from src.medical_chatbot.tools.disease_entity_extractor import extract_disease_entity; ..."` — confirms the tools package imports cleanly without indexes.
-3. `docker/login-action` → GHCR (GitHub Container Registry) with `GITHUB_TOKEN`.
-4. `docker/build-push-action` → builds and pushes three tags: `sha-<commit>`, `main`, `latest`.
-5. `appleboy/ssh-action` → SSHes into EC2 using `EC2_SSH_KEY` secret, runs `~/deploy.sh` (pulls new image, restarts compose stack).
+1. `appleboy/ssh-action@v1` — SSHes into EC2 using `EC2_HOST` and `EC2_SSH_KEY` secrets.
+2. Runs `~/deploy.sh` on the EC2 host.
+
+`~/deploy.sh` does:
+```bash
+cd ~/graduation_final_git
+git pull                          # pull latest code from GitHub
+pkill -f api_server.py || true    # stop old processes
+pkill -f bot.py || true
+screen -S api -X quit || true
+screen -S bot -X quit || true
+screen -dm -S api bash -c "source venv/bin/activate && python api_server.py"
+screen -dm -S bot bash -c "source venv/bin/activate && python telegram_bot/bot.py"
+```
+
+Large files (FAISS/BM25 indexes, `.env`, `api_keys.json`) are provisioned once via `scp` and live permanently on the EC2 root volume — they are never committed to git or transferred by the CI pipeline.
 
 ---
 

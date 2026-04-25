@@ -54,9 +54,6 @@ indexes/
 mlflow.db
 mlruns/
 
-# Docker
-.dockerignore
-
 # Ruff cache
 .ruff_cache/
 
