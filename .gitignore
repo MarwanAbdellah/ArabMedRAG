@@ -66,6 +66,10 @@ paper.aux
 paper.log
 paper.out
 /assets
+thesis_book/
 
 # IDE
 .idea/
+*.pem
+.claude
+.agent
