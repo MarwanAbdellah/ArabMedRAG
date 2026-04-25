@@ -1,0 +1,20 @@
+services:
+  api:
+    image: ghcr.io/marwanabdellah/graduation_final:latest
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./indexes:/app/indexes
+      - ./.env:/app/.env
+      - ./api_keys.json:/app/api_keys.json
+    restart: unless-stopped
+
+  bot:
+    image: ghcr.io/marwanabdellah/graduation_final:latest
+    command: python telegram_bot/bot.py
+    volumes:
+      - ./indexes:/app/indexes
+      - ./.env:/app/.env
+    restart: unless-stopped
+    depends_on:
+      - api
