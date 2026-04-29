@@ -18,12 +18,14 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           command_timeout: 30m
           script: |
-            # Kill existing screens and clean up dead sessions
-            sudo screen -S api -X quit 2>/dev/null || true
-            sudo screen -S bot -X quit 2>/dev/null || true
-            sudo screen -S mlflow -X quit 2>/dev/null || true
+            # Kill ALL existing instances (processes + screens)
+            sudo fuser -k 8000/tcp 2>/dev/null || true
+            sudo fuser -k 5000/tcp 2>/dev/null || true
+            sudo pkill -9 -f "python.*api_server" 2>/dev/null || true
+            sudo pkill -9 -f "python.*telegram_bot/bot" 2>/dev/null || true
+            sudo pkill -9 -f "mlflow ui" 2>/dev/null || true
             sudo screen -wipe 2>/dev/null || true
-            sleep 2
+            sleep 3
             # Run deploy as root so screens are accessible to root user
             sudo bash << 'DEPLOY'
             cd /home/ubuntu/graduation_final
