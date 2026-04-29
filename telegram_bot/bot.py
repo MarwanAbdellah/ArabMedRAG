@@ -295,6 +295,11 @@ def main():
     if not token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN not set in .env")
 
+    # Preload crew and embedding model at startup
+    logger.info("Loading medical chatbot pipeline...")
+    get_crew()
+    logger.info("Pipeline loaded successfully.")
+
     app = Application.builder().token(token).build()
 
     app.add_handler(CommandHandler("start", cmd_start))
