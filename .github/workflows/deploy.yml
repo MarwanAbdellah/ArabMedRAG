@@ -16,4 +16,14 @@ jobs:
           host: ${{ secrets.EC2_HOST }}
           username: ubuntu
           key: ${{ secrets.EC2_SSH_KEY }}
-          script: bash ~/deploy.sh
+          script: |
+            cd /home/ubuntu/graduation_final
+            git pull
+            source venv/bin/activate
+            pip install -r requirements.txt
+            pkill -f api_server.py || true
+            pkill -f telegram_bot/bot.py || true
+            sleep 2
+            screen -dmS api bash -c "source /home/ubuntu/graduation_final/venv/bin/activate && cd /home/ubuntu/graduation_final && python api_server.py"
+            screen -dmS bot bash -c "source /home/ubuntu/graduation_final/venv/bin/activate && cd /home/ubuntu/graduation_final && python telegram_bot/bot.py"
+            echo "Deploy complete."
