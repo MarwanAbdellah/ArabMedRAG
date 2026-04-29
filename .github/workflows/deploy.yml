@@ -21,10 +21,9 @@ jobs:
             git pull
             source venv/bin/activate
             pip install -r requirements.txt
-            sudo pkill -9 -f api_server.py || true
-            sudo pkill -9 -f telegram_bot/bot.py || true
-            sudo screen -S api -X quit || true
-            sudo screen -S bot -X quit || true
+            # Kill existing screens gracefully
+            sudo screen -S api -X quit 2>/dev/null || true
+            sudo screen -S bot -X quit 2>/dev/null || true
             sleep 2
             screen -dmS api bash -c "cd /home/ubuntu/graduation_final && source venv/bin/activate && python api_server.py"
             screen -dmS bot bash -c "cd /home/ubuntu/graduation_final && source venv/bin/activate && python telegram_bot/bot.py"
