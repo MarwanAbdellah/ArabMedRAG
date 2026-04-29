@@ -21,6 +21,7 @@ jobs:
             # Kill existing screens and clean up dead sessions
             sudo screen -S api -X quit 2>/dev/null || true
             sudo screen -S bot -X quit 2>/dev/null || true
+            sudo screen -S mlflow -X quit 2>/dev/null || true
             sudo screen -wipe 2>/dev/null || true
             sleep 2
             # Run deploy as root so screens are accessible to root user
@@ -31,5 +32,6 @@ jobs:
             pip install -r requirements.txt
             screen -dmS api bash -c "cd /home/ubuntu/graduation_final && source venv/bin/activate && python api_server.py"
             screen -dmS bot bash -c "cd /home/ubuntu/graduation_final && source venv/bin/activate && python telegram_bot/bot.py"
+            screen -dmS mlflow bash -c "cd /home/ubuntu/graduation_final && source venv/bin/activate && mlflow ui --host 0.0.0.0 --port 5000 --allowed-hosts '*' --cors-allowed-origins '*'"
             echo "Deploy complete."
             DEPLOY
