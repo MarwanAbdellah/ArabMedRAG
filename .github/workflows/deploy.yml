@@ -18,17 +18,17 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           command_timeout: 30m
           script: |
+            # Kill existing screens and clean up dead sessions
+            sudo screen -S api -X quit 2>/dev/null || true
+            sudo screen -S bot -X quit 2>/dev/null || true
+            sudo screen -wipe 2>/dev/null || true
+            sleep 2
+            # Run deploy as root so screens are accessible to root user
             sudo bash << 'DEPLOY'
             cd /home/ubuntu/graduation_final
             git pull
             source venv/bin/activate
             pip install -r requirements.txt
-            screen -S api -X quit 2>/dev/null || true
-            screen -S bot -X quit 2>/dev/null || true
-            # Kill ALL instances to prevent conflicts
-            pkill -9 -f api_server.py 2>/dev/null || true
-            pkill -9 -f telegram_bot/bot.py 2>/dev/null || true
-            sleep 2
             screen -dmS api bash -c "cd /home/ubuntu/graduation_final && source venv/bin/activate && python api_server.py"
             screen -dmS bot bash -c "cd /home/ubuntu/graduation_final && source venv/bin/activate && python telegram_bot/bot.py"
             echo "Deploy complete."
