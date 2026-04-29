@@ -136,6 +136,9 @@ async def lifespan(app: FastAPI):
     try:
         from src.medical_chatbot.crew import arabic_chatbot
         _crew = arabic_chatbot()
+        # Preload embedding model so first query is instant
+        from src.medical_chatbot.rag.embedding_pipeline import get_embedder
+        get_embedder()
         logger.info("Pipeline loaded successfully.")
     except Exception as e:
         logger.error(f"Failed to load pipeline: {e}")

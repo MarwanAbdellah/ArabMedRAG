@@ -45,6 +45,9 @@ def get_crew():
     if _crew is None:
         from src.medical_chatbot.crew import arabic_chatbot
         _crew = arabic_chatbot()
+        # Preload embedding model so first query is instant
+        from src.medical_chatbot.rag.embedding_pipeline import get_embedder
+        get_embedder()
     return _crew
 
 # ── Retrieval mode options ────────────────────────────────────────────────────
