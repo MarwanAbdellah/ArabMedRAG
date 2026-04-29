@@ -21,9 +21,11 @@ jobs:
             git pull
             source venv/bin/activate
             pip install -r requirements.txt
-            pkill -f api_server.py || true
-            pkill -f telegram_bot/bot.py || true
+            sudo pkill -9 -f api_server.py || true
+            sudo pkill -9 -f telegram_bot/bot.py || true
+            sudo screen -S api -X quit || true
+            sudo screen -S bot -X quit || true
             sleep 2
-            screen -dmS api bash -c "source /home/ubuntu/graduation_final/venv/bin/activate && cd /home/ubuntu/graduation_final && python api_server.py"
-            screen -dmS bot bash -c "source /home/ubuntu/graduation_final/venv/bin/activate && cd /home/ubuntu/graduation_final && python telegram_bot/bot.py"
+            screen -dmS api bash -c "cd /home/ubuntu/graduation_final && source venv/bin/activate && python api_server.py"
+            screen -dmS bot bash -c "cd /home/ubuntu/graduation_final && source venv/bin/activate && python telegram_bot/bot.py"
             echo "Deploy complete."
