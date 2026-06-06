@@ -1,20 +1,25 @@
 """
 hallucination_checker_tool.py
 ────────────────────────────────────────────────
-Lightweight hallucination detection.
+Two-stage hallucination detection:
 
-Strategy (no LLM re-call → fast inference):
-  1. Split generated answer into sentences.
-  2. For each sentence, check if any content word appears in
-     the retrieved context (substring overlap).
-  3. Flag sentences with zero context support.
-  4. Return lightweight JSON verdict.
+  Stage 1 (heuristic, fast):
+    1. Split generated answer into sentences.
+    2. For each sentence, check if any content word appears in
+       the retrieved context (substring overlap).
+    3. Flag sentences with zero context support.
+
+  Stage 2 (LLM judge, accurate):
+    4. Only runs if Stage 1 flagged sentences.
+    5. Calls litellm with a judge prompt for nuanced evaluation.
+    6. Returns specific unsupported claims with explanations.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from typing import Any
 
@@ -108,4 +113,108 @@ class HallucinationCheckerTool(BaseTool):
             }
             logger.info("Hallucination check passed – no unsupported claims detected.")
 
+        return json.dumps(result, ensure_ascii=False, indent=2)
+
+    @staticmethod
+    def _run_llm_judge(
+        answer: str,
+        context: str,
+        flagged_sentences: list[str],
+        model: str,
+        api_key: str,
+        api_base: str | None = None,
+    ) -> str:
+        """
+        Stage 2: LLM-based hallucination judge.
+
+        Evaluates each flagged sentence against the retrieved context
+        using an LLM call. Returns JSON with specific unsupported claims.
+        """
+        import litellm
+
+        sentences_text = "\n".join(f"- {s}" for s in flagged_sentences)
+
+        judge_prompt = f"""أنت مدقق حقائق طبي. مهمتك تقييم ما إذا كانت الجمل التالية من إجابة الطبيب مدعومة بالمصادر الطبية المسترجعة أم لا.
+
+## المصادر الطبية المسترجعة:
+{context}
+
+## الإجابة الكاملة للطبيب:
+{answer}
+
+## الجمل المشتبه فيها:
+{sentences_text}
+
+## التعليمات:
+- لكل جملة، قرر: "مدعومة" (المعلومة موجودة في المصادر أو مفهومة ضمناً) أو "غير مدعومة" (المعلومة غير موجودة في المصادر أو تتعارض معها).
+- إذا كانت الجملة تعميمًا صحيحًا بناءً على المعلومات الموجودة، اعتبرها مدعومة.
+- كن دقيقًا ولا تتعسف في التقييم.
+
+أجب بصيغة JSON فقط دون أي نص إضافي:
+{{
+  "verdicts": [
+    {{
+      "sentence": "...",
+      "supported": true,
+      "explanation": "..."
+    }}
+  ]
+}}"""
+
+        kwargs = {"model": model, "api_key": api_key}
+        if api_base:
+            kwargs["api_base"] = api_base
+
+        try:
+            resp = litellm.completion(
+                messages=[{"role": "user", "content": judge_prompt}],
+                max_tokens=800,
+                temperature=0.0,
+                **kwargs,
+            )
+            content = resp.choices[0].message.content or ""
+
+            # Extract JSON from response (handle markdown-wrapped JSON)
+            content = content.strip()
+            if "```json" in content:
+                content = content.split("```json")[1].split("```")[0].strip()
+            elif "```" in content:
+                content = content.split("```")[1].split("```")[0].strip()
+
+            verdicts = json.loads(content)
+            unsupported = [
+                v for v in verdicts.get("verdicts", []) if not v.get("supported", True)
+            ]
+
+            result: dict[str, Any] = {
+                "hallucination_detected": len(unsupported) > 0,
+                "flagged_count": len(unsupported),
+                "unsupported_claims": [
+                    {
+                        "sentence": v["sentence"],
+                        "explanation": v.get("explanation", ""),
+                    }
+                    for v in unsupported[:3]
+                ],
+                "recommendation": (
+                    "الادعاءات التالية قد لا تكون مدعومة بالمصادر المسترجعة."
+                    if unsupported
+                    else "جميع الادعاءات مدعومة بالمصادر."
+                ),
+            }
+        except Exception as e:
+            logger.error(f"LLM judge failed: {e}")
+            result = {
+                "hallucination_detected": True,
+                "flagged_count": len(flagged_sentences),
+                "unsupported_claims": [
+                    {"sentence": s, "explanation": "تعذر تدقيق هذه المعلومة بواسطة المدقق."}
+                    for s in flagged_sentences[:3]
+                ],
+                "recommendation": "حدث خطأ أثناء التدقيق. يُنصح بمراجعة الادعاءات يدوياً.",
+            }
+
+        logger.info(
+            f"LLM judge verdict: {result['flagged_count']} unsupported claim(s)."
+        )
         return json.dumps(result, ensure_ascii=False, indent=2)

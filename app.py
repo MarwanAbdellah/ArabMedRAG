@@ -318,12 +318,7 @@ with st.sidebar:
     st.divider()
 
     # ── LLM status (read-only, from .env) ─────────────
-    _provider = os.getenv("LLM_PROVIDER", "ollama").upper()
-    _model    = (
-        os.getenv("OPENROUTER_MODEL", "qwen/qwen2.5-72b-instruct")
-        if _provider == "OPENROUTER"
-        else os.getenv("OLLAMA_MODEL", "qwen2.5")
-    )
+    _model = os.getenv("LLM_MODEL", "groq/llama-3.3-70b-versatile")
     st.markdown("#### 🤖 النموذج المستخدم")
     st.markdown(
         f"<div style='background:var(--bg-input);border:1px solid var(--border);"

@@ -103,26 +103,15 @@ def _build_llm() -> LLM:
     """Build LLM client from environment config."""
     # Re-read .env each time in case of late env changes
     load_dotenv(dotenv_path=str(_ENV_PATH), override=True)
-    provider = os.getenv("LLM_PROVIDER", "ollama").lower().strip()
-    logger.info(f"[crew] Building LLM — provider='{provider}'")
-    print(f"[crew] LLM_PROVIDER={provider!r}")
-
-    if provider == "openrouter":
-        # Use the openrouter/ prefix — LiteLLM routes natively, no base_url needed.
-        # Providing base_url alongside the openrouter/ prefix causes malformed requests.
-        model = os.getenv("OPENROUTER_MODEL", "openrouter/qwen/qwen-2.5-72b-instruct")
-        api_key = os.getenv("OPENROUTER_API_KEY", "")
-        print(f"[crew] OpenRouter model: {model}")
-        return LLM(
-            model=model,
-            api_key=api_key,
-        )
-
-    # Ollama fallback
-    model = os.getenv("OLLAMA_MODEL", "ollama/qwen2.5")
-    base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-    print(f"[crew] Ollama model: {model} @ {base_url}")
-    return LLM(model=model, base_url=base_url)
+    model    = os.getenv("LLM_MODEL", "groq/llama-3.3-70b-versatile")
+    api_key  = os.getenv("LLM_API_KEY", "")
+    api_base = os.getenv("LLM_API_BASE", "") or None
+    logger.info(f"[crew] Building LLM — model='{model}'")
+    print(f"[crew] LLM model: {model}")
+    llm_kwargs = {"model": model, "api_key": api_key}
+    if api_base:
+        llm_kwargs["base_url"] = api_base
+    return LLM(**llm_kwargs)
 
 
 # Description: This is the heart of our multi-agent framework. We define our specialized AI crew here, linking each agent to its required tasks.
@@ -331,19 +320,12 @@ class arabic_chatbot:
         from dotenv import load_dotenv
 
         load_dotenv(override=True)
-        provider = os.getenv("LLM_PROVIDER", "openrouter").lower().strip()
-        if provider == "openrouter":
-            model = os.getenv(
-                "OPENROUTER_MODEL", "openrouter/qwen/qwen-2.5-72b-instruct"
-            )
-            api_key = os.getenv("OPENROUTER_API_KEY", "")
-            kwargs = {"model": model, "api_key": api_key}
-        else:
-            model = os.getenv("OLLAMA_MODEL", "ollama/qwen2.5")
-            kwargs = {
-                "model": model,
-                "api_base": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
-            }
+        model    = os.getenv("LLM_MODEL", "groq/llama-3.3-70b-versatile")
+        api_key  = os.getenv("LLM_API_KEY", "")
+        api_base = os.getenv("LLM_API_BASE", "") or None
+        kwargs   = {"model": model, "api_key": api_key}
+        if api_base:
+            kwargs["api_base"] = api_base
 
         # ── 0.5. Medical Intent Classification ────────────────────────────────
         _progress("intent", "🤔 تحليل القصد", "التحقق من المحتوى الطبي...")
@@ -730,15 +712,47 @@ class arabic_chatbot:
         _progress("llm", "🤖 توليد الرد", f"اكتمل الرد ({len(answer)} حرف)")
         print(f"[Pipeline] answer_len={len(answer)}")
 
-        # ── 6. Lightweight hallucination check ───────────────────────────────
+        # ── 6. Two-stage hallucination detection ────────────────────────────
         _progress("hallucination", "✅ تدقيق المحتوى", "فحص الادعاءات غير المدعومة...")
         halluc_warning = False
         try:
+            # Stage 1: Fast heuristic pre-filter
             halluc_json = HallucinationCheckerTool()._run(answer, context)
             halluc = json.loads(halluc_json)
-            if halluc.get("flagged_count", 0) > 0:
-                answer += "\n\n⚠️ ملاحظة: قد تحتاج بعض المعلومات إلى مراجعة إضافية."
-                halluc_warning = True
+            heuristic_flagged = halluc.get("flagged_count", 0)
+
+            if heuristic_flagged > 0:
+                logger.info(f"Stage 1 heuristic flagged {heuristic_flagged} sentence(s) → running LLM judge")
+                _progress("hallucination", "⚖️ تدقيق دقيق", "تقييم الادعاءات بواسطة الذكاء الاصطناعي...")
+
+                # Stage 2: LLM judge for nuanced evaluation
+                judge_model = os.getenv("HALLUCINATION_JUDGE_MODEL", model)
+                judge_json = HallucinationCheckerTool._run_llm_judge(
+                    answer=answer,
+                    context=context,
+                    flagged_sentences=halluc.get("unsupported_claims", []),
+                    model=judge_model,
+                    api_key=kwargs.get("api_key", api_key),
+                    api_base=kwargs.get("api_base"),
+                )
+                judge_result = json.loads(judge_json)
+
+                if judge_result.get("flagged_count", 0) > 0:
+                    halluc_warning = True
+                    claims = judge_result.get("unsupported_claims", [])
+                    if claims:
+                        warning_lines = ["\n\n⚠️ الادعاءات التالية قد لا تكون مدعومة بالمصادر المسترجعة:"]
+                        for i, c in enumerate(claims, 1):
+                            sentence = c.get("sentence", "")
+                            explanation = c.get("explanation", "")
+                            warning_lines.append(f"\n{i}. «{sentence}»")
+                            if explanation:
+                                warning_lines.append(f"   ↳ {explanation}")
+                        answer += "\n".join(warning_lines)
+                    else:
+                        answer += "\n\n⚠️ ملاحظة: قد تحتاج بعض المعلومات إلى مراجعة إضافية."
+                else:
+                    logger.info("LLM judge cleared all flagged sentences — no warning needed.")
         except Exception as e:
             print(f"[Pipeline] hallucination check skipped: {e}")
 

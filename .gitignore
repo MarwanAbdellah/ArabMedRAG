@@ -65,6 +65,9 @@ paper.out
 /assets
 thesis_book/
 
+# Repository context (auto-generated, not for version control)
+REPOSITORY_CONTEXT.md
+
 # IDE
 .idea/
 *.pem

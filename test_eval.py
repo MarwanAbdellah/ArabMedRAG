@@ -29,7 +29,7 @@ def main():
     
     try:
         eval_resp = litellm.completion(
-            model=os.getenv("OPENROUTER_MODEL", "groq/llama-3.3-70b-versatile"),
+            model=os.getenv("LLM_MODEL", "groq/llama-3.3-70b-versatile"),
             messages=[{"role": "user", "content": eval_prompt}],
             max_tokens=10,
             temperature=0.0
