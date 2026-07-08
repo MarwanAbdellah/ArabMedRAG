@@ -101,12 +101,62 @@ python src/medical_chatbot/main.py --query "ما هي أعراض ارتفاع ض
 
 ---
 
+## 🚀 REST API
+
+A FastAPI server provides programmatic access to the chatbot with API key authentication.
+
+### Start the API Server
+
+```bash
+uvicorn api_server:app --host 0.0.0.0 --port 8000
+```
+
+### Authentication
+
+Include `X-API-Key` header with your requests:
+```bash
+curl -X POST http://localhost:8000/api/v1/query \
+  -H "X-API-Key: med-api-key-change-me-123" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "ما هي أعراض مرض السكري؟", "mode": "hybrid"}'
+```
+
+### API Endpoints
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| GET | `/api/v1/health` | No | Health check |
+| POST | `/api/v1/query` | Yes | Query the chatbot |
+| GET | `/api/v1/categories` | Yes | List medical categories |
+
+### Query Modes
+
+| Mode | Description |
+|------|-------------|
+| `rag` | Vector search only (FAISS) |
+| `bm25` | Keyword search only |
+| `hybrid` | FAISS + BM25 (default) |
+| `internet` | Internet search via Serper |
+| `all` | All methods combined |
+
+---
+
+## 🌐 Web Application
+
+A Next.js 15 frontend with authentication and chat interface.
+
+**Repository:** [arab-med-rag-website](https://github.com/Ahmed-Qotb/arab-med-rag-wepsite)
+
+**Tech Stack:** Next.js 15, React 19, TypeScript, Tailwind CSS v4, MongoDB, better-auth
+
+---
+
 ## 📁 Project Structure
 
 ```
 graduation_final/
 ├── app.py                          # Streamlit web UI
-├── paper.tex                       # LaTeX scientific paper
+├── api_server.py                   # FastAPI REST API
 ├── environment.yml                 # Conda environment
 ├── requirements.txt                # Pip dependencies
 ├── .env.example                    # Environment template
