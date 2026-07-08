@@ -40,7 +40,7 @@ Final Arabic Medical Answer (with citations + disclaimer)
 
 ### Video
 
-https://github.com/MarwanAbdellah/ArabMedRAG/raw/main/demo/Demo.mp4
+[![Demo Video](https://img.youtube.com/vi/iRSIVuOYQ5s/maxresdefault.jpg)](https://youtu.be/iRSIVuOYQ5s)
 
 ### Screenshots
 
