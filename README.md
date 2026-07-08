@@ -1,7 +1,7 @@
 # 🏥 Arabic Medical AI Assistant (ArabMedRAG)
 
 > **Production-ready Arabic Medical Chatbot** powered by **CrewAI**, **Hybrid RAG** (FAISS + BM25),
-> **Multilingual Sentence Transformers**, and **Qwen** LLM — grounded on 341,476 Arabic medical Q&A pairs.
+> **E5 base embeddings**, and **any LLM** — grounded on 341,476 Arabic medical Q&A pairs.
 
 ---
 
@@ -41,10 +41,10 @@ Final Arabic Medical Answer (with citations + disclaimer)
 | Component       | Technology                                  |
 |-----------------|---------------------------------------------|
 | Agent Framework | CrewAI ≥ 0.80                               |
-| Embeddings      | Multilingual Sentence Transformers (`sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`) |
+| Embeddings      | E5 base                                        |
 | Vector Store    | FAISS `IndexFlatIP` (cosine similarity)     |
 | Keyword Search  | BM25 (`rank-bm25`)                          |
-| LLM             | Qwen2.5 via Ollama (or OpenRouter API)      |
+| LLM             | Any API-based or local LLM                     |
 | Web UI          | Streamlit                                   |
 | Language        | Python 3.10 (conda)                         |
 
@@ -63,16 +63,10 @@ conda activate arabic_chatbot
 
 ```bash
 cp .env.example .env
-# Edit .env — set LLM_PROVIDER (ollama or openrouter)
+# Edit .env — set LLM_MODEL and LLM_API_KEY
 ```
 
-### 3. Pull Qwen model (if using Ollama)
-
-```bash
-ollama pull qwen2.5
-```
-
-### 4. Build the search indexes
+### 3. Build the search indexes
 
 ```bash
 # Quick test — sample 1,000 rows (~2 min)
@@ -82,7 +76,7 @@ python src/medical_chatbot/rag/build_index.py --sample 1000
 python src/medical_chatbot/rag/build_index.py
 ```
 
-### 5. Run the chatbot
+### 4. Run the chatbot
 
 **Web UI (recommended):**
 ```bash
@@ -191,18 +185,11 @@ graduation_final/
 
 ## 🔧 LLM Configuration
 
-### Option A — Ollama (Local, Default)
-```env
-LLM_PROVIDER=ollama
-OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_MODEL=ollama/qwen2.5
-```
+This chatbot supports any API-based or local LLM. Configure via environment variables:
 
-### Option B — OpenRouter API
 ```env
-LLM_PROVIDER=openrouter
-OPENROUTER_API_KEY=your_key_here
-OPENROUTER_MODEL=openrouter/qwen/qwen-2.5-72b-instruct
+LLM_MODEL=your_model_name
+LLM_API_KEY=your_api_key_here
 ```
 
 ---
@@ -228,18 +215,6 @@ The classifier agent instantly detects life-threatening symptoms:
 
 **Response (bypasses full pipeline):**
 > "⚠️ قد تشير هذه الأعراض إلى حالة طبية طارئة. يرجى طلب المساعدة الطبية فورًا أو الاتصال بخدمات الطوارئ."
-
----
-
-## 📄 Scientific Paper
-
-See [`paper.tex`](paper.tex) for the full LaTeX research paper.
-
-Compile with:
-```bash
-pdflatex paper.tex
-pdflatex paper.tex  # Run twice for references/TOC
-```
 
 ---
 
