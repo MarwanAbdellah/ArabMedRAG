@@ -36,6 +36,23 @@ Final Arabic Medical Answer (with citations + disclaimer)
 
 ---
 
+## 🎬 Demo
+
+### Video
+
+https://github.com/MarwanAbdellah/ArabMedRAG/raw/main/demo/Demo.mp4
+
+### Screenshots
+
+| | |
+|---|---|
+| **Retrieved Context** | **Response Details** |
+| ![Retrieved Context](demo/Retrieved%20context.png) | ![Response Details](demo/Response%20Details.png) |
+| **Emergency Alert** | |
+| ![Emergency Alert](demo/Emergency%20Alert.png) | |
+
+---
+
 ## 🛠️ Technology Stack
 
 | Component       | Technology                                  |
