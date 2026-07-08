@@ -1,7 +1,7 @@
 # ArabMedRAG — Technical Documentation
 
 **System:** Arabic Medical Question-Answering powered by Agentic RAG  
-**Stack:** CrewAI · FAISS · BM25 · multilingual-E5-base · Qwen2.5 · FastAPI · Streamlit · Telegram  
+**Stack:** CrewAI · FAISS · BM25 · E5 base · Any LLM · FastAPI · Streamlit · Telegram  
 **Dataset:** 341,476 Arabic medical Q&A pairs
 
 ---
@@ -51,7 +51,7 @@ User Query (Arabic / any language)
       ├── Context too weak? ──► Optional Serper internet search
       │
       ▼
-[6] Qwen LLM Generation          — temperature=0.3, max_tokens=1200
+[6] LLM Generation               — temperature=0.3, max_tokens=1200
       │
       ▼
 [7] Hallucination Detection Agent — lexical coverage check
@@ -77,7 +77,7 @@ Final Arabic Medical Answer (citations + medical disclaimer)
 | **Token** | The atomic unit a language model reads — roughly a word or word-piece. `cl100k_base` is the tokenizer used by GPT/OpenAI models; it handles Arabic adequately with BPE encoding. |
 | **Mean-Pooling** | Averaging all token embeddings in a sequence into one fixed-size vector representing the whole sentence. Used in `DocumentEmbedder` to turn variable-length text into a 768-d vector. |
 | **L2 Normalization** | Scaling a vector so its length (L2 norm) = 1.0. After this, inner product equals cosine similarity — a mathematical equivalence that lets FAISS's `IndexFlatIP` work as a cosine-similarity index. |
-| **LLM** (Large Language Model) | A neural network trained on vast text corpora that can generate fluent text. Here: **Qwen2.5** (72B parameters), run locally via Ollama or remotely via OpenRouter API. |
+| **LLM** (Large Language Model) | A neural network trained on vast text corpora that can generate fluent text. Here: any API-based or local LLM configured via `LLM_MODEL` and `LLM_API_KEY` environment variables. |
 | **Temperature** | A sampling parameter (0.3 here) that controls LLM randomness. Lower = more deterministic and factual; higher = more creative but potentially less accurate. |
 | **max_tokens** | The upper limit on how many tokens the LLM may generate in one response (1200 here). Prevents runaway outputs and controls cost. |
 | **Hallucination** | When an LLM generates plausible-sounding but factually unsupported text. In a medical context this is dangerous — hence the hallucination-checker agent. |
@@ -109,7 +109,6 @@ graduation_final/
 ├── requirements.txt            # Pip dependencies (installed into venv on EC2)
 ├── README.md                   # User-facing quickstart
 ├── TECHNICAL_DOCS.md           # This file
-├── test_eval.py                # LLM-as-judge evaluation harness
 ├── mlflow.db                   # Local MLflow SQLite tracking store
 ├── .env / .env.example         # Runtime secrets and config
 ├── .gitignore
@@ -421,15 +420,12 @@ Enabled only when `MLFLOW_ENABLED=true`. Every pipeline run logs params (query m
 #### LLM Configuration (`_build_llm()`)
 
 ```python
-if LLM_PROVIDER == "openrouter":
-    model = "openrouter/qwen/qwen-2.5-72b-instruct"
-    api_key = OPENROUTER_API_KEY
-elif LLM_PROVIDER == "ollama":
-    model = "ollama/qwen2.5"
-    base_url = OLLAMA_BASE_URL  # default: http://localhost:11434
+# Generic LLM configuration via environment variables
+model = LLM_MODEL      # e.g., "groq/llama-3.3-70b-versatile", "openai/gpt-4", etc.
+api_key = LLM_API_KEY  # API key for the chosen provider
 ```
 
-Both providers are accessed through LiteLLM's unified interface — `crew.py` doesn't call the OpenAI SDK or Ollama directly.
+The LLM is accessed through LiteLLM's unified interface — `crew.py` supports any provider that LiteLLM supports (OpenAI, Groq, Anthropic, Ollama, OpenRouter, etc.).
 
 ### `cache.py`
 
@@ -565,21 +561,7 @@ application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
 ---
 
-## 8. Evaluation & Infrastructure
-
-### `test_eval.py`
-
-Standalone evaluation harness — not integrated into the CI pipeline, run manually.
-
-```python
-query = "ما هو مرض السكر"   # fixed test query
-tool_result = HybridSearchTool()._run(query)
-citations   = CitationGroundingTool()._run(tool_result)
-# ask litellm judge: "هل هذه المعلومات ذات صلة؟ أجب بـ نعم أو لا"
-# model: groq/llama-3.3-70b-versatile
-```
-
-Writes `eval_results.json` with retrieved chunks + relevance judgement. The LLM-as-judge pattern (using a separate, strong model to evaluate outputs) avoids manual annotation for quick iteration.
+## 8. Infrastructure
 
 ### `.github/workflows/deploy.yml`
 
@@ -678,15 +660,6 @@ curl http://localhost:8000/api/v1/health
 ```
 
 Expected: `{"status": "ok", "model": "...", "index_loaded": true}`
-
-### Run evaluation harness
-
-```bash
-python test_eval.py
-cat eval_results.json
-```
-
-Expected: JSON with retrieved chunks and `relevance: "نعم"` from the judge.
 
 ### Check MLflow runs
 
